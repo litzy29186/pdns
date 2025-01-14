@@ -4,12 +4,13 @@ Release: %{getenv:BUILDER_RPM_RELEASE}%{?dist}
 Summary: Modern, advanced and high performance recursing/non authoritative name server
 Group: System Environment/Daemons
 License: GPLv2
+Vendor: PowerDNS.COM BV
 URL: https://powerdns.com
 Source0: %{name}-%{getenv:BUILDER_VERSION}.tar.bz2
 
 Provides: powerdns-recursor = %{version}-%{release}
 
-%if 0%{?rhel} < 8
+%if 0%{?rhel} < 8 && 0%{?amzn} != 2023
 BuildRequires: boost169-devel
 %else
 BuildRequires: boost-devel
@@ -18,10 +19,13 @@ BuildRequires: libcap-devel
 BuildRequires: systemd
 BuildRequires: systemd-devel
 BuildRequires: openssl-devel
-BuildRequires: net-snmp-devel
-BuildRequires: libsodium-devel
 BuildRequires: fstrm-devel
 BuildRequires: libcurl-devel
+
+%if 0%{?amzn} != 2023
+BuildRequires: net-snmp-devel
+BuildRequires: libsodium-devel
+%endif
 
 %ifarch aarch64
 BuildRequires: lua-devel
@@ -55,8 +59,6 @@ export LDFLAGS=-L/usr/lib64/boost169
 %configure \
     --enable-option-checking=fatal \
     --sysconfdir=%{_sysconfdir}/%{name} \
-    --with-libsodium \
-    --with-net-snmp \
     --disable-silent-rules \
     --disable-static \
     --enable-unit-tests \
@@ -64,7 +66,12 @@ export LDFLAGS=-L/usr/lib64/boost169
     --enable-dnstap \
     --with-libcap \
     --with-lua=%{lua_implementation} \
-    --enable-systemd --with-systemd=%{_unitdir}
+%if 0%{?amzn} != 2023
+    --with-libsodium \
+    --with-net-snmp \
+%endif
+    --enable-systemd --with-systemd=%{_unitdir} \
+    --enable-nod
 
 make %{?_smp_mflags}
 
@@ -74,15 +81,25 @@ make %{?_smp_mflags} check || (cat test-suite.log && false)
 %install
 make install DESTDIR=%{buildroot}
 
-%{__mv} %{buildroot}%{_sysconfdir}/%{name}/recursor.conf{-dist,}
 %{__mkdir} %{buildroot}%{_sysconfdir}/%{name}/recursor.d
 
 # change user and group to pdns-recursor and add default include-dir
-sed -i \
-    -e 's/# setuid=/setuid=pdns-recursor/' \
-    -e 's/# setgid=/setgid=pdns-recursor/' \
-    -e 's!# include-dir=.*!&\ninclude-dir=%{_sysconfdir}/%{name}/recursor.d!' \
-    %{buildroot}%{_sysconfdir}/%{name}/recursor.conf
+cat << EOF > %{buildroot}%{_sysconfdir}/%{name}/recursor.conf
+dnssec:
+  # validation: process
+recursor:
+  include_dir: %{_sysconfdir}/%{name}/recursor.d
+  setuid: pdns-recursor
+  setgid: pdns-recursor
+incoming:
+  # listen:
+  # - 127.0.0.1
+outgoing:
+  # source_address:
+  # - 0.0.0.0
+EOF
+
+%{__install } -d %{buildroot}/%{_sharedstatedir}/%{name}
 
 # The EL7 and 8 systemd actually supports %t, but its version number is older than that, so we do use seperate runtime dirs, but don't rely on RUNTIME_DIRECTORY
 %if 0%{?rhel} < 9
@@ -95,8 +112,12 @@ sed -e 's!/pdns_recursor!& --socket-dir=%t/pdns-recursor-%i!' -e 's!RuntimeDirec
 %pre
 getent group pdns-recursor > /dev/null || groupadd -r pdns-recursor
 getent passwd pdns-recursor > /dev/null || \
-    useradd -r -g pdns-recursor -d / -s /sbin/nologin \
+    useradd -r -g pdns-recursor -d /var/lib/pdns-recursor -s /sbin/nologin \
     -c "PowerDNS Recursor user" pdns-recursor
+# Change home directory to /var/lib/pdns-recursor if needed
+if [[ $(getent passwd pdns-recursor | cut -d: -f6) == "/" ]]; then
+    usermod -d /var/lib/pdns-recursor pdns-recursor
+fi
 exit 0
 
 %post
@@ -119,4 +140,6 @@ systemctl daemon-reload ||:
 %dir %{_sysconfdir}/%{name}
 %dir %{_sysconfdir}/%{name}/recursor.d
 %config(noreplace) %{_sysconfdir}/%{name}/recursor.conf
+%config %{_sysconfdir}/%{name}/recursor.yml-dist
+%dir %attr(-,pdns-recursor,pdns-recursor) %{_sharedstatedir}/%{name}
 %doc README

@@ -8,6 +8,7 @@ import ssl
 from dnsdisttests import DNSDistTest
 
 class TestBackendDiscovery(DNSDistTest):
+    # these ports are hardcoded for now, sorry about that!
     _noSVCBackendPort = 10600
     _svcNoUpgradeBackendPort = 10601
     _svcUpgradeDoTBackendPort = 10602
@@ -261,89 +262,90 @@ class TestBackendDiscovery(DNSDistTest):
         tlsContext.load_cert_chain('server.chain', 'server.key')
 
         TCPNoSVCResponder = threading.Thread(name='TCP no SVC Responder', target=cls.TCPResponder, args=[cls._noSVCBackendPort, cls._toResponderQueue, cls._fromResponderQueue, True, False, cls.NoSVCCallback])
-        TCPNoSVCResponder.setDaemon(True)
+        TCPNoSVCResponder.daemon = True
         TCPNoSVCResponder.start()
 
         TCPNoUpgradeResponder = threading.Thread(name='TCP no upgrade Responder', target=cls.TCPResponder, args=[cls._svcNoUpgradeBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.NoUpgradePathCallback])
-        TCPNoUpgradeResponder.setDaemon(True)
+        TCPNoUpgradeResponder.daemon = True
         TCPNoUpgradeResponder.start()
 
-        TCPUpgradeToDoTResponder = threading.Thread(name='TCP upgrade to DoT Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTCallback])
-        TCPUpgradeToDoTResponder.setDaemon(True)
+        # this one is special, does partial writes!
+        TCPUpgradeToDoTResponder = threading.Thread(name='TCP upgrade to DoT Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTCallback, None, False, '127.0.0.1', True])
+        TCPUpgradeToDoTResponder.daemon = True
         TCPUpgradeToDoTResponder.start()
         # and the corresponding DoT responder
         UpgradedDoTResponder = threading.Thread(name='DoT upgraded Responder', target=cls.TCPResponder, args=[10652, cls._toResponderQueue, cls._fromResponderQueue, False, False, None, tlsContext])
-        UpgradedDoTResponder.setDaemon(True)
+        UpgradedDoTResponder.daemon = True
         UpgradedDoTResponder.start()
 
         TCPUpgradeToDoHResponder = threading.Thread(name='TCP upgrade to DoH Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoHBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoHCallback])
-        TCPUpgradeToDoHResponder.setDaemon(True)
+        TCPUpgradeToDoHResponder.daemon = True
         TCPUpgradeToDoHResponder.start()
         # and the corresponding DoH responder
         UpgradedDOHResponder = threading.Thread(name='DOH Responder', target=cls.DOHResponder, args=[10653, cls._toResponderQueue, cls._fromResponderQueue, False, False, None, tlsContext])
-        UpgradedDOHResponder.setDaemon(True)
+        UpgradedDOHResponder.daemon = True
         UpgradedDOHResponder.start()
 
         TCPUpgradeToDoTDifferentAddrResponder = threading.Thread(name='TCP upgrade to DoT different addr 1 Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTBackendDifferentAddrPort1, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTDifferentAddr1Callback])
-        TCPUpgradeToDoTDifferentAddrResponder.setDaemon(True)
+        TCPUpgradeToDoTDifferentAddrResponder.daemon = True
         TCPUpgradeToDoTDifferentAddrResponder.start()
         # and the corresponding DoT responder
         UpgradedDoTResponder = threading.Thread(name='DoT upgraded different addr 1 Responder', target=cls.TCPResponder, args=[10654, cls._toResponderQueue, cls._fromResponderQueue, False, False, None, tlsContext, False, '127.0.0.2'])
-        UpgradedDoTResponder.setDaemon(True)
+        UpgradedDoTResponder.daemon = True
         UpgradedDoTResponder.start()
 
         TCPUpgradeToDoTDifferentAddrResponder = threading.Thread(name='TCP upgrade to DoT different addr 2 Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTBackendDifferentAddrPort2, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTDifferentAddr2Callback, None, False, '127.0.0.2'])
-        TCPUpgradeToDoTDifferentAddrResponder.setDaemon(True)
+        TCPUpgradeToDoTDifferentAddrResponder.daemon = True
         TCPUpgradeToDoTDifferentAddrResponder.start()
         # and the corresponding DoT responder
         UpgradedDoTResponder = threading.Thread(name='DoT upgraded different addr 2 Responder', target=cls.TCPResponder, args=[10655, cls._toResponderQueue, cls._fromResponderQueue, False, False, None, tlsContext, False])
-        UpgradedDoTResponder.setDaemon(True)
+        UpgradedDoTResponder.daemon = True
         UpgradedDoTResponder.start()
 
         TCPUpgradeToUnreachableDoTResponder = threading.Thread(name='TCP upgrade to unreachable DoT Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTUnreachableBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTUnreachableCallback])
-        TCPUpgradeToUnreachableDoTResponder.setDaemon(True)
+        TCPUpgradeToUnreachableDoTResponder.daemon = True
         TCPUpgradeToUnreachableDoTResponder.start()
         # and NO corresponding DoT responder
         # this is not a mistake!
 
         BrokenResponseResponder = threading.Thread(name='Broken response Responder', target=cls.TCPResponder, args=[cls._svcBrokenDNSResponseBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.BrokenResponseCallback])
-        BrokenResponseResponder.setDaemon(True)
+        BrokenResponseResponder.daemon = True
         BrokenResponseResponder.start()
 
         DOHMissingPathResponder = threading.Thread(name='DoH missing path Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoHBackendWithoutPathPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoHMissingPathCallback])
-        DOHMissingPathResponder.setDaemon(True)
+        DOHMissingPathResponder.daemon = True
         DOHMissingPathResponder.start()
 
         EOFResponder = threading.Thread(name='EOF Responder', target=cls.TCPResponder, args=[cls._eofBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.EOFCallback])
-        EOFResponder.setDaemon(True)
+        EOFResponder.daemon = True
         EOFResponder.start()
 
         ServFailResponder = threading.Thread(name='ServFail Responder', target=cls.TCPResponder, args=[cls._servfailBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.ServFailCallback])
-        ServFailResponder.setDaemon(True)
+        ServFailResponder.daemon = True
         ServFailResponder.start()
 
         WrongNameResponder = threading.Thread(name='Wrong Name Responder', target=cls.TCPResponder, args=[cls._wrongNameBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.WrongNameCallback])
-        WrongNameResponder.setDaemon(True)
+        WrongNameResponder.daemon = True
         WrongNameResponder.start()
 
         WrongIDResponder = threading.Thread(name='Wrong ID Responder', target=cls.TCPResponder, args=[cls._wrongIDBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.WrongIDCallback])
-        WrongIDResponder.setDaemon(True)
+        WrongIDResponder.daemon = True
         WrongIDResponder.start()
 
         TooManyQuestionsResponder = threading.Thread(name='Too many questions Responder', target=cls.TCPResponder, args=[cls._tooManyQuestionsBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.TooManyQuestionsCallback])
-        TooManyQuestionsResponder.setDaemon(True)
+        TooManyQuestionsResponder.daemon = True
         TooManyQuestionsResponder.start()
 
         badQNameResponder = threading.Thread(name='Bad QName Responder', target=cls.TCPResponder, args=[cls._badQNameBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.BadQNameCallback])
-        badQNameResponder.setDaemon(True)
+        badQNameResponder.daemon = True
         badQNameResponder.start()
 
         TCPUpgradeToDoTNoPortResponder = threading.Thread(name='TCP upgrade to DoT (no port) Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoTNoPortBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoTNoPortCallback])
-        TCPUpgradeToDoTNoPortResponder.setDaemon(True)
+        TCPUpgradeToDoTNoPortResponder.daemon = True
         TCPUpgradeToDoTNoPortResponder.start()
 
         TCPUpgradeToDoHNoPortResponder = threading.Thread(name='TCP upgrade to DoH (no port) Responder', target=cls.TCPResponder, args=[cls._svcUpgradeDoHNoPortBackendPort, cls._toResponderQueue, cls._fromResponderQueue, False, False, cls.UpgradeDoHNoPortCallback])
-        TCPUpgradeToDoHNoPortResponder.setDaemon(True)
+        TCPUpgradeToDoHNoPortResponder.daemon = True
         TCPUpgradeToDoHNoPortResponder.start()
 
 
@@ -356,17 +358,17 @@ class TestBackendDiscovery(DNSDistTest):
             if line.startswith('#') or line.startswith('All'):
                 continue
             tokens = line.split()
-            self.assertTrue(len(tokens) == 12 or len(tokens) == 13)
+            self.assertTrue(len(tokens) == 13 or len(tokens) == 14)
             if tokens[1] == '127.0.0.1:10652':
                 # in this particular case, the upgraded backend
                 # does not replace the existing one and thus
                 # the health-check is forced to auto (or lazy auto)
-                self.assertEquals(tokens[2], 'up')
+                self.assertEqual(tokens[2], 'up')
             else:
-                self.assertEquals(tokens[2], 'UP')
+                self.assertEqual(tokens[2], 'UP')
             pool = ''
-            if len(tokens) == 13:
-                pool = tokens[12]
+            if len(tokens) == 14:
+                pool = tokens[13]
             backends[tokens[1]] = pool
 
         expected = {
@@ -407,3 +409,51 @@ class TestBackendDiscovery(DNSDistTest):
             # let's wait a bit longer
             time.sleep(5)
             self.assertTrue(self.checkBackendsUpgraded())
+
+class TestBackendDiscoveryByHostname(DNSDistTest):
+    _consoleKey = DNSDistTest.generateConsoleKey()
+    _consoleKeyB64 = base64.b64encode(_consoleKey).decode('ascii')
+    _config_params = ['_consoleKeyB64', '_consolePort']
+    _config_template = """
+    setKey("%s")
+    controlSocket("127.0.0.1:%d")
+
+    function resolveCB(hostname, ips)
+      print('Got response for '..hostname)
+      for _, ip in ipairs(ips) do
+        print(ip)
+        newServer(ip:toString())
+      end
+    end
+
+    getAddressInfo('dns.quad9.net.', resolveCB)
+    """
+    def checkBackends(self):
+        output = self.sendConsoleCommand('showServers()')
+        print(output)
+        backends = {}
+        for line in output.splitlines(False):
+            if line.startswith('#') or line.startswith('All'):
+                continue
+            tokens = line.split()
+            self.assertTrue(len(tokens) == 13 or len(tokens) == 14)
+            backends[tokens[1]] = tokens[2]
+
+        if len(backends) != 4:
+            return False
+
+        for expected in ['9.9.9.9:53', '149.112.112.112:53', '[2620:fe::9]:53', '[2620:fe::fe]:53']:
+            self.assertIn(expected, backends)
+        for backend in backends:
+            self.assertTrue(backends[backend])
+        return True
+
+    def testBackendFromHostname(self):
+        """
+        Backend Discovery: From hostname
+        """
+        # enough time for resolution to happen
+        time.sleep(4)
+        if not self.checkBackends():
+            time.sleep(4)
+            self.assertTrue(self.checkBackends())

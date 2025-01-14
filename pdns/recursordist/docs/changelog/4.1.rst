@@ -695,7 +695,7 @@ See :doc:`EOL Statements <../appendices/EOL>`.
 
   The full release notes can be read `on the blog <https://blog.powerdns.com/2017/12/04/powerdns-recursor-4-1/>`__.
 
-  This is a major release containing significant speedups (both in throughput and latency), enhanced capabilities and a highly conformant and robust DNSSEC validation implementation that is ready for heavy production use. In addition, our EDNS Client Subnet implementation now scales effortlessly to networks needing very fine grained scopes (as used by some ‘country sized’ service providers).
+  This is a major release containing significant speedups (both in throughput and latency), enhanced capabilities and a highly conformant and robust DNSSEC validation implementation that is ready for heavy production use. In addition, our EDNS Client Subnet implementation now scales effortlessly to networks needing very fine-grained scopes (as used by some ‘country sized’ service providers).
 
   - Improved DNSSEC support,
   - Improved documentation,
@@ -832,7 +832,7 @@ See :doc:`EOL Statements <../appendices/EOL>`.
     :tags: Internals, Bug Fixes
     :pullreq: 5917
 
-    Use ``_exit()`` when we really really want to exit, for example
+    Use ``_exit()`` when we *really* want to exit, for example
     after a fatal error. This stops us dying while we die. A call to
     ``exit()`` will trigger destructors, which may paradoxically stop
     the process from exiting, taking down only one thread, but harming
@@ -933,7 +933,7 @@ See :doc:`EOL Statements <../appendices/EOL>`.
     :tags: Improvements
     :pullreq: 5774
 
-    Add :ref:`experimental metrics <stat-x-our-latency>` that track the time spent inside PowerDNS per query.
+    Add experimental :doc:`../metrics` ``x-our-latency`` that track the time spent inside PowerDNS per query.
     These metrics ignore time spent waiting for the network.
 
   .. change::
@@ -1341,7 +1341,7 @@ See :doc:`EOL Statements <../appendices/EOL>`.
     :tags: Bug Fixes
     :pullreq: 5209
 
-    Ensure locks can not be copied.
+    Ensure locks cannot be copied.
 
   .. change::
     :tags: Improvements, RPZ

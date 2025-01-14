@@ -22,6 +22,7 @@
 #pragma once
 #include "pdns/namespaces.hh"
 
+#include <cstdint>
 #include <vector>
 #include <map>
 #include <string>
@@ -36,6 +37,11 @@
 
 class GeoIPInterface;
 
+namespace YAML
+{
+class Node;
+};
+
 struct GeoIPDomain;
 
 struct GeoIPNetmask
@@ -47,13 +53,13 @@ class GeoIPBackend : public DNSBackend
 {
 public:
   GeoIPBackend(const std::string& suffix = "");
-  ~GeoIPBackend();
+  ~GeoIPBackend() override;
 
   void lookup(const QType& qtype, const DNSName& qdomain, int zoneId, DNSPacket* pkt_p = nullptr) override;
-  bool list(const DNSName& target, int domain_id, bool include_disabled = false) override { return false; } // not supported
+  bool list(const DNSName& /* target */, int /* domain_id */, bool /* include_disabled */ = false) override { return false; } // not supported
   bool get(DNSResourceRecord& r) override;
   void reload() override;
-  void rediscover(string* status = 0) override;
+  void rediscover(string* status = nullptr) override;
   bool getDomainInfo(const DNSName& domain, DomainInfo& di, bool getSerial = true) override;
   void getAllDomains(vector<DomainInfo>* domains, bool getSerial, bool include_disabled) override;
 
@@ -74,9 +80,14 @@ private:
 
   void initialize();
   string format2str(string format, const Netmask& addr, GeoIPNetmask& gl, const GeoIPDomain& dom);
-  bool d_dnssec;
+  bool d_dnssec{};
   bool hasDNSSECkey(const DNSName& name);
   bool lookup_static(const GeoIPDomain& dom, const DNSName& search, const QType& qtype, const DNSName& qdomain, const Netmask& addr, GeoIPNetmask& gl);
+  void setupNetmasks(const YAML::Node& domain, GeoIPDomain& dom);
+  bool loadDomain(const YAML::Node& domain, std::uint32_t domainID, GeoIPDomain& dom);
+  void loadDomainsFromDirectory(const std::string& dir, vector<GeoIPDomain>& domains);
   vector<DNSResourceRecord> d_result;
   vector<GeoIPInterface> d_files;
+  std::vector<std::string> d_global_mapping_lookup_formats;
+  std::map<std::string, std::string> d_global_custom_mapping;
 };

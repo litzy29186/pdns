@@ -30,9 +30,11 @@
 #include "dnsdist.hh"
 #include "dnsdist-ecs.hh"
 #include "dnsdist-kvs.hh"
+#include "dnsdist-lua.hh"
 #include "dnsdist-lua-ffi.hh"
 #include "dolog.hh"
 #include "dnsparser.hh"
+#include "dns_random.hh"
 
 class MaxQPSIPRule : public DNSRule
 {
@@ -414,7 +416,7 @@ public:
   }
   bool matches(const DNSQuestion* dq) const override
   {
-    return dq->getHeader()->cd || (getEDNSZ(*dq) & EDNS_HEADER_FLAG_DO);    // turns out dig sets ad by default..
+    return dq->getHeader()->cd || (dnsdist::getEDNSZ(*dq) & EDNS_HEADER_FLAG_DO);    // turns out dig sets ad by default..
   }
 
   string toString() const override
@@ -556,7 +558,7 @@ private:
 class HTTPPathRule : public DNSRule
 {
 public:
-  HTTPPathRule(const std::string& path);
+  HTTPPathRule(std::string path);
   bool matches(const DNSQuestion* dq) const override;
   string toString() const override;
 private:
@@ -1055,7 +1057,7 @@ public:
   {
     if(d_proba == 1.0)
       return true;
-    double rnd = 1.0*random() / RAND_MAX;
+    double rnd = 1.0*dns_random_uint32() / UINT32_MAX;
     return rnd > (1.0 - d_proba);
   }
   string toString() const override
@@ -1069,7 +1071,7 @@ private:
 class TagRule : public DNSRule
 {
 public:
-  TagRule(const std::string& tag, boost::optional<std::string> value) : d_value(value), d_tag(tag)
+  TagRule(const std::string& tag, boost::optional<std::string> value) : d_value(std::move(value)), d_tag(tag)
   {
   }
   bool matches(const DNSQuestion* dq) const override
@@ -1103,13 +1105,13 @@ private:
 class PoolAvailableRule : public DNSRule
 {
 public:
-  PoolAvailableRule(const std::string& poolname) : d_pools(&g_pools), d_poolname(poolname)
+  PoolAvailableRule(const std::string& poolname) : d_poolname(poolname)
   {
   }
 
   bool matches(const DNSQuestion* dq) const override
   {
-    return (getPool(*d_pools, d_poolname)->countServers(true) > 0);
+    return (getPool(d_poolname)->countServers(true) > 0);
   }
 
   string toString() const override
@@ -1117,20 +1119,19 @@ public:
     return "pool '" + d_poolname + "' is available";
   }
 private:
-  mutable LocalStateHolder<pools_t> d_pools;
   std::string d_poolname;
 };
 
 class PoolOutstandingRule : public DNSRule
 {
 public:
-  PoolOutstandingRule(const std::string& poolname, const size_t limit) : d_pools(&g_pools), d_poolname(poolname), d_limit(limit)
+  PoolOutstandingRule(const std::string& poolname, const size_t limit) : d_poolname(poolname), d_limit(limit)
   {
   }
 
   bool matches(const DNSQuestion* dq) const override
   {
-    return (getPool(*d_pools, d_poolname)->poolLoad()) > d_limit;
+    return (getPool(d_poolname)->poolLoad()) > d_limit;
   }
 
   string toString() const override
@@ -1138,7 +1139,6 @@ public:
     return "pool '" + d_poolname + "' outstanding > " + std::to_string(d_limit);
   }
 private:
-  mutable LocalStateHolder<pools_t> d_pools;
   std::string d_poolname;
   size_t d_limit;
 };
@@ -1318,7 +1318,7 @@ private:
 class ProxyProtocolValueRule : public DNSRule
 {
 public:
-  ProxyProtocolValueRule(uint8_t type, boost::optional<std::string> value): d_value(value), d_type(type)
+  ProxyProtocolValueRule(uint8_t type, boost::optional<std::string> value): d_value(std::move(value)), d_type(type)
   {
   }
 
@@ -1348,4 +1348,67 @@ public:
 private:
   boost::optional<std::string> d_value;
   uint8_t d_type;
+};
+
+class PayloadSizeRule : public DNSRule
+{
+  enum class Comparisons : uint8_t { equal, greater, greaterOrEqual, smaller, smallerOrEqual };
+public:
+  PayloadSizeRule(const std::string& comparison, uint16_t size): d_size(size)
+  {
+    if (comparison == "equal") {
+      d_comparison = Comparisons::equal;
+    }
+    else if (comparison == "greater") {
+      d_comparison = Comparisons::greater;
+    }
+    else if (comparison == "greaterOrEqual") {
+      d_comparison = Comparisons::greaterOrEqual;
+    }
+    else if (comparison == "smaller") {
+      d_comparison = Comparisons::smaller;
+    }
+    else if (comparison == "smallerOrEqual") {
+      d_comparison = Comparisons::smallerOrEqual;
+    }
+    else {
+      throw std::runtime_error("Unsupported comparison '" + comparison + "'");
+    }
+  }
+
+  bool matches(const DNSQuestion* dq) const override
+  {
+    const auto size = dq->getData().size();
+
+    switch (d_comparison) {
+    case Comparisons::equal:
+      return size == d_size;
+    case Comparisons::greater:
+      return size > d_size;
+    case Comparisons::greaterOrEqual:
+      return size >= d_size;
+    case Comparisons::smaller:
+      return size < d_size;
+    case Comparisons::smallerOrEqual:
+      return size <= d_size;
+    default:
+      return false;
+    }
+  }
+
+  string toString() const override
+  {
+    static const std::array<const std::string, 5> comparisonStr{
+      "equal to" ,
+      "greater than",
+      "equal to or greater than",
+      "smaller than",
+      "equal to or smaller than"
+    };
+    return "payload size is " + comparisonStr.at(static_cast<size_t>(d_comparison)) + " " + std::to_string(d_size);
+  }
+
+private:
+  uint16_t d_size;
+  Comparisons d_comparison;
 };

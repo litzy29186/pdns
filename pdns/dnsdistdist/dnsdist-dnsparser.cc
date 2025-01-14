@@ -186,4 +186,51 @@ bool changeNameInDNSPacket(PacketBuffer& initialPacket, const DNSName& from, con
   return true;
 }
 
+namespace PacketMangling
+{
+  bool editDNSHeaderFromPacket(PacketBuffer& packet, const std::function<bool(dnsheader& header)>& editFunction)
+  {
+    if (packet.size() < sizeof(dnsheader)) {
+      throw std::runtime_error("Trying to edit the DNS header of a too small packet");
+    }
+
+    return editDNSHeaderFromRawPacket(packet.data(), editFunction);
+  }
+
+  bool editDNSHeaderFromRawPacket(void* packet, const std::function<bool(dnsheader& header)>& editFunction)
+  {
+    if (dnsheader_aligned::isMemoryAligned(packet)) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
+      auto* header = reinterpret_cast<dnsheader*>(packet);
+      return editFunction(*header);
+    }
+
+    dnsheader header{};
+    memcpy(&header, packet, sizeof(header));
+    if (!editFunction(header)) {
+      return false;
+    }
+    memcpy(packet, &header, sizeof(header));
+    return true;
+  }
+}
+
+void setResponseHeadersFromConfig(dnsheader& dnsheader, const ResponseConfig& config)
+{
+  if (config.setAA) {
+    dnsheader.aa = *config.setAA;
+  }
+  if (config.setAD) {
+    dnsheader.ad = *config.setAD;
+  }
+  else {
+    dnsheader.ad = false;
+  }
+  if (config.setRA) {
+    dnsheader.ra = *config.setRA;
+  }
+  else {
+    dnsheader.ra = dnsheader.rd; // for good measure
+  }
+}
 }

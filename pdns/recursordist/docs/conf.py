@@ -52,7 +52,7 @@ master_doc = 'indexTOC'
 
 # General information about the project.
 project = 'PowerDNS Recursor'
-copyright = '2001-' + str(datetime.date.today().year) + ', PowerDNS.COM BV'
+copyright = 'PowerDNS.COM BV'
 author = 'PowerDNS.COM BV'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -127,6 +127,7 @@ html_favicon = 'common/favicon.ico'
 html_static_path = ['_static']
 html_style = 'pdns.css'
 
+html_sidebars = { '**': ['logo-text.html', 'searchbox.html', 'relations.html', 'localtoc.html', 'sourcelink.html'] }
 
 # -- Options for HTMLHelp output ------------------------------------------
 

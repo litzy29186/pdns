@@ -1,5 +1,7 @@
-
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #include <thread>
@@ -51,7 +53,7 @@ BOOST_AUTO_TEST_CASE(test_MPlexer)
     ttd.tv_sec -= 5;
 
     bool writeCBCalled = false;
-    auto writeCB = [](int fd, FDMultiplexer::funcparam_t& param) {
+    auto writeCB = [](int /* fd */, FDMultiplexer::funcparam_t& param) {
       auto calledPtr = boost::any_cast<bool*>(param);
       BOOST_REQUIRE(calledPtr != nullptr);
       *calledPtr = true;
@@ -100,7 +102,7 @@ BOOST_AUTO_TEST_CASE(test_MPlexer)
     BOOST_CHECK_EQUAL(ready, 0);
 
     bool readCBCalled = false;
-    auto readCB = [](int fd, FDMultiplexer::funcparam_t& param) {
+    auto readCB = [](int /* fd */, FDMultiplexer::funcparam_t& param) {
       auto calledPtr = boost::any_cast<bool*>(param);
       BOOST_REQUIRE(calledPtr != nullptr);
       *calledPtr = true;
@@ -243,12 +245,12 @@ BOOST_AUTO_TEST_CASE(test_MPlexer_ReadAndWrite)
 
     bool readCBCalled = false;
     bool writeCBCalled = false;
-    auto readCB = [](int fd, FDMultiplexer::funcparam_t& param) {
+    auto readCB = [](int /* fd */, FDMultiplexer::funcparam_t& param) {
       auto calledPtr = boost::any_cast<bool*>(param);
       BOOST_REQUIRE(calledPtr != nullptr);
       *calledPtr = true;
     };
-    auto writeCB = [](int fd, FDMultiplexer::funcparam_t& param) {
+    auto writeCB = [](int /* fd */, FDMultiplexer::funcparam_t& param) {
       auto calledPtr = boost::any_cast<bool*>(param);
       BOOST_REQUIRE(calledPtr != nullptr);
       *calledPtr = true;

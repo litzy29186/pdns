@@ -1,4 +1,7 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 
 #ifdef HAVE_CONFIG_H
@@ -153,7 +156,7 @@ public:
         d_end = range.second;
       }
       else {
-        auto range = idx.equal_range(std::make_tuple(qdomain, qtype.getCode()));
+        auto range = idx.equal_range(std::tuple(qdomain, qtype.getCode()));
         d_iter = range.first;
         d_end = range.second;
       }
@@ -184,7 +187,7 @@ public:
     return true;
   }
 
-  bool list(const DNSName& target, int zoneId, bool include_disabled = false) override
+  bool list(const DNSName& target, int zoneId, bool /* include_disabled */ = false) override
   {
     findZone(target, zoneId, d_records, d_currentZone);
 
@@ -200,7 +203,7 @@ public:
   bool getDomainMetadata(const DNSName& name, const std::string& kind, std::vector<std::string>& meta) override
   {
     const auto& idx = boost::multi_index::get<OrderedNameKindTag>(s_metadata.at(d_backendId));
-    auto it = idx.find(std::make_tuple(name, kind));
+    auto it = idx.find(std::tuple(name, kind));
     if (it == idx.end()) {
       /* funnily enough, we are expected to return true even though we might not know that zone */
       return true;
@@ -213,7 +216,7 @@ public:
   bool setDomainMetadata(const DNSName& name, const std::string& kind, const std::vector<std::string>& meta) override
   {
     auto& idx = boost::multi_index::get<OrderedNameKindTag>(s_metadata.at(d_backendId));
-    auto it = idx.find(std::make_tuple(name, kind));
+    auto it = idx.find(std::tuple(name, kind));
     if (it == idx.end()) {
       s_metadata.at(d_backendId).insert(SimpleMetaData(name, kind, meta));
       return true;
@@ -258,7 +261,7 @@ public:
       }
 
       auto& idx = records->get<OrderedNameTypeTag>();
-      auto range = idx.equal_range(std::make_tuple(best, QType::SOA));
+      auto range = idx.equal_range(std::tuple(best, QType::SOA));
       if (range.first == range.second) {
         return false;
       }
@@ -283,12 +286,12 @@ public:
   {
   }
 
-  bool getDomainMetadata(const DNSName& name, const std::string& kind, std::vector<std::string>& meta) override
+  bool getDomainMetadata(const DNSName& /* name */, const std::string& /* kind */, std::vector<std::string>& /* meta */) override
   {
     return false;
   }
 
-  bool setDomainMetadata(const DNSName& name, const std::string& kind, const std::vector<std::string>& meta) override
+  bool setDomainMetadata(const DNSName& /* name */, const std::string& /* kind */, const std::vector<std::string>& /* meta */) override
   {
     return false;
   }
@@ -464,7 +467,7 @@ BOOST_AUTO_TEST_CASE(test_simple) {
     zoneA.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("geo.powerdns.com."), QType::A, "192.168.0.42", 60));
     SimpleBackend::s_zones[1].insert(zoneA);
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1");
     UeberBackend::go();
 
@@ -577,7 +580,7 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_separate_zones) {
     zoneB.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("geo.powerdns.org."), QType::AAAA, "2001:db8::42", 60));
     SimpleBackend::s_zones[2].insert(zoneB);
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1, SimpleBackend:2");
     UeberBackend::go();
 
@@ -722,7 +725,7 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_overlay) {
     zoneB.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("geo.powerdns.com."), QType::A, "192.168.0.42", 60));
     SimpleBackend::s_zones[2].insert(zoneB);
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1, SimpleBackend:2");
     UeberBackend::go();
 
@@ -849,7 +852,7 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_overlay_name) {
     zoneB.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("geo.powerdns.com."), QType::A, "192.168.0.42", 60));
     SimpleBackend::s_zones[2].insert(zoneB);
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1, SimpleBackend:2");
     UeberBackend::go();
 
@@ -973,7 +976,7 @@ BOOST_AUTO_TEST_CASE(test_child_zone) {
     zoneB.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("ns1.powerdns.com."), QType::A, "192.0.2.1", 3600));
     SimpleBackend::s_zones[2].insert(zoneB);
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1, SimpleBackend:2");
     UeberBackend::go();
 
@@ -1046,15 +1049,17 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_best_soa) {
     zoneB.d_records->insert(SimpleBackend::SimpleDNSRecord(DNSName("0.1.0.0.2.ip6.arpa."), QType::SOA, "ns.apnic.net. read-txt-record-of-zone-first-dns-admin.apnic.net. 3005126844 7200 1800 604800 3600", 3600));
     SimpleBackend::s_zones[2].insert(zoneB);
 
-    BackendMakers().report(new SimpleBackendFactory());
-    BackendMakers().report(new SimpleBackendBestAuthFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
+    BackendMakers().report(std::make_unique<SimpleBackendBestAuthFactory>());
     BackendMakers().launch("SimpleBackendBestAuth:1, SimpleBackend:2");
     UeberBackend::go();
 
     auto testFunction = [](UeberBackend& ub) -> void {
     {
-      auto sbba = dynamic_cast<SimpleBackendBestAuth*>(ub.backends.at(0));
+      auto* sbba = dynamic_cast<SimpleBackendBestAuth*>(ub.backends.at(0).get());
       BOOST_REQUIRE(sbba != nullptr);
+
+      // NOLINTNEXTLINE (clang-analyzer-core.NullDereference): Not sure.
       sbba->d_authLookupCount = 0;
 
       // test getAuth()
@@ -1107,7 +1112,7 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_metadata) {
     SimpleBackend::s_zones[2].insert(zoneB);
     SimpleBackend::s_metadata[2].insert(SimpleBackend::SimpleMetaData(DNSName("powerdns.org."), "test-data-b", { "value1", "value2"}));
 
-    BackendMakers().report(new SimpleBackendFactory());
+    BackendMakers().report(std::make_unique<SimpleBackendFactory>());
     BackendMakers().launch("SimpleBackend:1, SimpleBackend:2");
     UeberBackend::go();
 
@@ -1155,7 +1160,7 @@ BOOST_AUTO_TEST_CASE(test_multi_backends_metadata) {
 
     {
       // check that it has not been updated in the second backend
-      const auto& it = SimpleBackend::s_metadata[2].find(std::make_tuple(DNSName("powerdns.org."), "test-data-b"));
+      const auto& it = SimpleBackend::s_metadata[2].find(std::tuple(DNSName("powerdns.org."), "test-data-b"));
       BOOST_REQUIRE(it != SimpleBackend::s_metadata[2].end());
       BOOST_REQUIRE_EQUAL(it->d_values.size(), 2U);
       BOOST_CHECK_EQUAL(it->d_values.at(0), "value1");

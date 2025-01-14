@@ -6,9 +6,9 @@ import socket
 import threading
 import unittest
 import dns
-from dnsdisttests import DNSDistTest
+from dnsdisttests import DNSDistTest, pickAvailablePort
 
-class TestRuleMetrics(DNSDistTest):
+class RuleMetricsTest(object):
 
     _config_template = """
     addTLSLocal("127.0.0.1:%s", "%s", "%s", { provider="openssl" })
@@ -27,17 +27,25 @@ class TestRuleMetrics(DNSDistTest):
     addAction('cache.metrics.tests.powerdns.com', PoolAction('cache'))
     """
     _webTimeout = 2.0
-    _webServerPort = 8083
+    _webServerPort = pickAvailablePort()
     _webServerAPIKey = 'apisecret'
     _webServerAPIKeyHashed = '$scrypt$ln=10,p=1,r=8$9v8JxDfzQVyTpBkTbkUqYg==$bDQzAOHeK1G9UvTPypNhrX48w974ZXbFPtRKS34+aso='
     _serverKey = 'server.key'
     _serverCert = 'server.chain'
     _serverName = 'tls.tests.dnsdist.org'
     _caCert = 'ca.pem'
-    _tlsServerPort = 8453
-    _dohServerPort = 8443
+    _tlsServerPort = pickAvailablePort()
+    _dohServerPort = pickAvailablePort()
     _dohBaseURL = ("https://%s:%d/" % (_serverName, _dohServerPort))
     _config_params = ['_tlsServerPort', '_serverCert', '_serverKey', '_dohServerPort', '_serverCert', '_serverKey', '_testServerPort', '_webServerPort', '_webServerAPIKeyHashed']
+
+    @classmethod
+    def setUpClass(cls):
+        cls.startResponders()
+        cls.startDNSDist()
+        cls.setUpSockets()
+        cls.waitForTCPSocket('127.0.0.1', cls._webServerPort)
+        print("Launching tests..")
 
     def getMetric(self, name):
         headers = {'x-api-key': self._webServerAPIKey}
@@ -51,6 +59,18 @@ class TestRuleMetrics(DNSDistTest):
         self.assertIn(name, stats)
         return int(stats[name])
 
+    def getPoolMetric(self, poolName, metricName):
+        headers = {'x-api-key': self._webServerAPIKey}
+        url = 'http://127.0.0.1:' + str(self._webServerPort) + '/api/v1/servers/localhost/pool?name=' + poolName
+        r = requests.get(url, headers=headers, timeout=self._webTimeout)
+        self.assertTrue(r)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.json())
+        content = r.json()
+        stats = content['stats']
+        self.assertIn(metricName, stats)
+        return int(stats[metricName])
+
     def testRCodeIncreaseMetrics(self):
         """
         Metrics: Check that metrics are correctly updated for RCodeAction
@@ -60,6 +80,8 @@ class TestRuleMetrics(DNSDistTest):
             ( 'refused', dns.rcode.REFUSED ),
             ( 'servfail', dns.rcode.SERVFAIL )
         ]
+        servfailBackendResponses = self.getMetric('servfail-responses')
+
         for (name, rcode) in rcodes:
             qname = 'rcode-' + name + '.metrics.tests.powerdns.com.'
             query = dns.message.make_query(qname, 'A', 'IN')
@@ -68,18 +90,21 @@ class TestRuleMetrics(DNSDistTest):
             expectedResponse = dns.message.make_response(query)
             expectedResponse.set_rcode(rcode)
 
+            ruleMetricBefore = self.getMetric('rule-' + name)
+            if name != 'refused':
+                frontendMetricBefore = self.getMetric('frontend-' + name)
+
             for method in ("sendUDPQuery", "sendTCPQuery"):
                 sender = getattr(self, method)
                 (_, receivedResponse) = sender(query, response=None, useQueue=False)
                 self.assertEqual(receivedResponse, expectedResponse)
 
-            self.assertEquals(self.getMetric('rule-' + name), 2)
+            self.assertEqual(self.getMetric('rule-' + name), ruleMetricBefore + 2)
+            if name != 'refused':
+                self.assertEqual(self.getMetric('frontend-' + name), frontendMetricBefore + 2)
 
-    def sendDOHQueryWrapper(self, query, response, useQueue=True):
-        return self.sendDOHQuery(self._dohServerPort, self._serverName, self._dohBaseURL, query, response=response, caFile=self._caCert, useQueue=useQueue)
-
-    def sendDOTQueryWrapper(self, query, response, useQueue=True):
-        return self.sendDOTQuery(self._tlsServerPort, self._serverName, query, response, self._caCert, useQueue=useQueue)
+        # self-generated responses should not increase this metric
+        self.assertEqual(self.getMetric('servfail-responses'), servfailBackendResponses)
 
     def testCacheMetrics(self):
         """
@@ -102,6 +127,8 @@ class TestRuleMetrics(DNSDistTest):
             responsesBefore = self.getMetric('responses')
             cacheHitsBefore = self.getMetric('cache-hits')
             cacheMissesBefore = self.getMetric('cache-misses')
+            poolCacheHitsBefore = self.getPoolMetric('cache', 'cacheHits')
+            poolCacheMissesBefore = self.getPoolMetric('cache', 'cacheMisses')
 
             sender = getattr(self, method)
             # first time, cache miss
@@ -116,3 +143,45 @@ class TestRuleMetrics(DNSDistTest):
             self.assertEqual(self.getMetric('responses'), responsesBefore + 2)
             self.assertEqual(self.getMetric('cache-hits'), cacheHitsBefore + 1)
             self.assertEqual(self.getMetric('cache-misses'), cacheMissesBefore + 1)
+            self.assertEqual(self.getPoolMetric('cache', 'cacheHits'), poolCacheHitsBefore + 1)
+            self.assertEqual(self.getPoolMetric('cache', 'cacheMisses'), poolCacheMissesBefore + 1)
+
+    def testServFailMetrics(self):
+        """
+        Metrics: Check that servfail metrics are correctly updated for server failures
+        """
+
+        for method in ("sendUDPQuery", "sendTCPQuery", "sendDOTQueryWrapper", "sendDOHQueryWrapper"):
+            qname = method + '.servfail.cache.metrics.tests.powerdns.com.'
+            query = dns.message.make_query(qname, 'A', 'IN')
+            # dnsdist set RA = RD for spoofed responses
+            query.flags &= ~dns.flags.RD
+            response = dns.message.make_response(query)
+            response.set_rcode(dns.rcode.SERVFAIL)
+
+            frontendBefore = self.getMetric('frontend-servfail')
+            servfailBefore = self.getMetric('servfail-responses')
+            ruleBefore = self.getMetric('rule-servfail')
+
+            sender = getattr(self, method)
+            # first time, cache miss
+            (receivedQuery, receivedResponse) = sender(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(receivedResponse, response)
+            # second time, hit
+            (_, receivedResponse) = sender(query, response=None, useQueue=False)
+            self.assertEqual(receivedResponse, response)
+
+            self.assertEqual(self.getMetric('frontend-servfail'), frontendBefore + 2)
+            self.assertEqual(self.getMetric('servfail-responses'), servfailBefore + 1)
+            self.assertEqual(self.getMetric('rule-servfail'), ruleBefore)
+
+class TestRuleMetricsDefault(RuleMetricsTest, DNSDistTest):
+    None
+
+class TestRuleMetricsRecvmmsg(RuleMetricsTest, DNSDistTest):
+    # test the metrics with recvmmsg/sendmmsg support enabled as well
+    _config_template = RuleMetricsTest._config_template + """
+        setUDPMultipleMessagesVectorSize(10)
+    """

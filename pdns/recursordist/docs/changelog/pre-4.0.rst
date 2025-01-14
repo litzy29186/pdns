@@ -884,7 +884,7 @@ Improvements
    selection. Suggested by Darren Gamble, implemented with help from
    Niels Bakker. Change in `commit
    1620 <http://wiki.powerdns.com/projects/trac/changeset/1620>`__.
--  Solaris on x86 has a long standing bug in port\_getn(), which we now
+-  Solaris on x86 has a long-standing bug in port\_getn(), which we now
    work around. Spotted by 'Dirk' and 'AS'. Solution suggested by the
    Apache runtime library, update in `commit
    1622 <http://wiki.powerdns.com/projects/trac/changeset/1622>`__.
@@ -923,7 +923,7 @@ Improvements
    1677 <http://wiki.powerdns.com/projects/trac/changeset/1677>`__.
 -  On some platforms, it may be better to have PowerDNS itself
    distribute queries over threads (instead of leaving it up to the
-   kernel). This experimental feature can be enabled with the
+   kernel). This is an experimental feature and can be enabled with the
    'pdns-distributes-queries' setting. Code in `commit
    1678 <http://wiki.powerdns.com/projects/trac/changeset/1678>`__ and
    beyond. Speeds up Solaris measurably.
@@ -1018,7 +1018,7 @@ Changes between RC2 and -release
 -  'Make install' when an existing configuration file contained a 'fork'
    statement has been fixed. Spotted by Darren Gamble, code in `commit
    1534 <http://wiki.powerdns.com/projects/trac/changeset/1534>`__.
--  Reloading a non-existent allow-from-file caused the control thread to
+-  Reloading a nonexistent allow-from-file caused the control thread to
    stop working. Spotted by Imre Gergely, code in `commit
    1532 <http://wiki.powerdns.com/projects/trac/changeset/1532>`__.
 -  Parser got confused by reading en empty line in auth-forward-zones.

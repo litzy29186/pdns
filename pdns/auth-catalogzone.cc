@@ -94,7 +94,7 @@ std::string CatalogInfo::toJson() const
   }
   if (!d_group.empty()) {
     json11::Json::array entries;
-    for (const string& group : d_group) {
+    for (const auto& group : d_group) {
       entries.push_back(group);
     }
     object["group"] = entries;
@@ -107,7 +107,10 @@ std::string CatalogInfo::toJson() const
 
 void CatalogInfo::updateHash(CatalogHashMap& hashes, const DomainInfo& di) const
 {
-  hashes[di.catalog].process(static_cast<char>(di.id) + di.zone.toLogString() + "\0" + d_coo.toLogString() + "\0" + d_unique.toLogString());
+  hashes[di.catalog].process(std::to_string(di.id) + di.zone.toLogString() + string("\0", 1) + d_coo.toLogString() + string("\0", 1) + d_unique.toLogString());
+  for (const auto& group : d_group) {
+    hashes[di.catalog].process(std::to_string(group.length()) + group);
+  }
 }
 
 DNSZoneRecord CatalogInfo::getCatalogVersionRecord(const DNSName& zone)
@@ -116,7 +119,7 @@ DNSZoneRecord CatalogInfo::getCatalogVersionRecord(const DNSName& zone)
   dzr.dr.d_name = DNSName("version") + zone;
   dzr.dr.d_ttl = 0;
   dzr.dr.d_type = QType::TXT;
-  dzr.dr.d_content = std::make_shared<TXTRecordContent>("2");
+  dzr.dr.setContent(std::make_shared<TXTRecordContent>("2"));
   return dzr;
 }
 
@@ -135,14 +138,14 @@ void CatalogInfo::toDNSZoneRecords(const DNSName& zone, vector<DNSZoneRecord>& d
   dzr.dr.d_name = prefix;
   dzr.dr.d_ttl = 0;
   dzr.dr.d_type = QType::PTR;
-  dzr.dr.d_content = std::make_shared<PTRRecordContent>(d_zone.toString());
+  dzr.dr.setContent(std::make_shared<PTRRecordContent>(d_zone.toString()));
   dzrs.emplace_back(dzr);
 
   if (!d_coo.empty()) {
     dzr.dr.d_name = DNSName("coo") + prefix;
     dzr.dr.d_ttl = 0;
     dzr.dr.d_type = QType::PTR;
-    dzr.dr.d_content = std::make_shared<PTRRecordContent>(d_coo);
+    dzr.dr.setContent(std::make_shared<PTRRecordContent>(d_coo));
     dzrs.emplace_back(dzr);
   }
 
@@ -150,7 +153,7 @@ void CatalogInfo::toDNSZoneRecords(const DNSName& zone, vector<DNSZoneRecord>& d
     dzr.dr.d_name = DNSName("group") + prefix;
     dzr.dr.d_ttl = 0;
     dzr.dr.d_type = QType::TXT;
-    dzr.dr.d_content = std::make_shared<TXTRecordContent>("\"" + group + "\"");
+    dzr.dr.setContent(std::make_shared<TXTRecordContent>("\"" + group + "\""));
     dzrs.emplace_back(dzr);
   }
 }

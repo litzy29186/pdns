@@ -27,6 +27,7 @@
 #include <boost/multi_index/ordered_index.hpp>
 #include <boost/multi_index/key_extractors.hpp>
 
+#include "channel.hh"
 #include "dnsdist-tcp.hh"
 
 namespace dnsdist
@@ -58,7 +59,7 @@ private:
     uint16_t d_queryID;
   };
 
-  typedef multi_index_container<
+  using content_t = multi_index_container<
     Entry,
     indexed_by<
       ordered_unique<tag<IDTag>,
@@ -67,29 +68,35 @@ private:
                        member<Entry, uint16_t, &Entry::d_queryID>,
                        member<Entry, uint16_t, &Entry::d_asyncID>>>,
       ordered_non_unique<tag<TTDTag>,
-                         member<Entry, struct timeval, &Entry::d_ttd>>>>
-    content_t;
+                         member<Entry, struct timeval, &Entry::d_ttd>>>>;
 
   static void pickupExpired(content_t&, const struct timeval& now, std::list<std::pair<uint16_t, std::unique_ptr<CrossProtocolQuery>>>& expiredEvents);
   static struct timeval getNextTTD(const content_t&);
 
   struct Data
   {
+    Data(bool failOpen);
+    Data(const Data&) = delete;
+    Data(Data&&) = delete;
+    Data& operator=(const Data&) = delete;
+    Data& operator=(Data&&) = delete;
+    ~Data() = default;
+
     LockGuarded<content_t> d_content;
-    FDWrapper d_notifyPipe;
-    FDWrapper d_watchPipe;
+    pdns::channel::Notifier d_notifier;
+    pdns::channel::Waiter d_waiter;
     bool d_failOpen{true};
     bool d_done{false};
   };
   std::shared_ptr<Data> d_data{nullptr};
 
   static void mainThread(std::shared_ptr<Data> data);
-  static bool wait(const Data& data, FDMultiplexer& mplexer, std::vector<int>& readyFDs, int atMostMs);
+  static bool wait(Data& data, FDMultiplexer& mplexer, std::vector<int>& readyFDs, int atMostMs);
   bool notify() const;
 };
 
-bool suspendQuery(DNSQuestion& dq, uint16_t asyncID, uint16_t queryID, uint32_t timeoutMs);
-bool suspendResponse(DNSResponse& dr, uint16_t asyncID, uint16_t queryID, uint32_t timeoutMs);
+bool suspendQuery(DNSQuestion& dnsQuestion, uint16_t asyncID, uint16_t queryID, uint32_t timeoutMs);
+bool suspendResponse(DNSResponse& dnsResponse, uint16_t asyncID, uint16_t queryID, uint32_t timeoutMs);
 bool queueQueryResumptionEvent(std::unique_ptr<CrossProtocolQuery>&& query);
 bool resumeQuery(std::unique_ptr<CrossProtocolQuery>&& query);
 void handleQueuedAsynchronousEvents();

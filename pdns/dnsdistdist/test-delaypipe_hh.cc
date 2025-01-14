@@ -1,4 +1,7 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -22,8 +25,7 @@ BOOST_AUTO_TEST_CASE(test_object_pipe) {
 
   op.close();
   BOOST_CHECK_EQUAL(op.readTimeout(&i, 1), 0);
-
-};
+}
 
 std::atomic<int> done = 0;
 BOOST_AUTO_TEST_CASE(test_delay_pipe_small) {
@@ -53,9 +55,9 @@ BOOST_AUTO_TEST_CASE(test_delay_pipe_small) {
   sleep(1);
   BOOST_CHECK_EQUAL(done, n);
 
-};
+}
 
-BOOST_AUTO_TEST_CASE(test_delay_pipe_big) {  
+BOOST_AUTO_TEST_CASE(test_delay_pipe_big) {
   done=0;
   struct Work
   {
@@ -74,7 +76,6 @@ BOOST_AUTO_TEST_CASE(test_delay_pipe_big) {
 
   sleep(1);
   BOOST_CHECK_EQUAL(done, n);
-};
-
+}
 
 BOOST_AUTO_TEST_SUITE_END();

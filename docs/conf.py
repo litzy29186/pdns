@@ -52,7 +52,7 @@ master_doc = 'indexTOC'
 
 # General information about the project.
 project = 'PowerDNS Authoritative Server'
-copyright = '2001-' + str(datetime.date.today().year) + ', PowerDNS.COM BV'
+copyright = 'PowerDNS.COM BV'
 author = 'PowerDNS.COM BV'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -114,6 +114,8 @@ html_theme_options = {
     "project_nav_name": "PowerDNS Authoritative Server",
 }
 html_favicon = 'common/favicon.ico'
+
+html_sidebars = { '**': ['logo-text.html', 'searchbox.html', 'relations.html', 'localtoc.html', 'sourcelink.html'] }
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the

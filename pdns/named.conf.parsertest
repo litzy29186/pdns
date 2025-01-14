@@ -1,6 +1,15 @@
 # this file is used by ../pdns/test-bindparser_cc.cc
 # if you change it, please make check!
 
+acl bogusnets {
+    0.0.0.0/8;  192.0.2.0/24; 224.0.0.0/3;
+    10.0.0.0/8; 172.16.0.0/12; 192.168.0.0/16;
+};
+
+acl "not-these-ips" {
+    !192.168.0/24;!10.0/16;any;
+};
+
 options {
 	directory "./zones/";
 	recursion no;
@@ -30,41 +39,42 @@ zone "test.dyndns" {
 };
 
 zone "wtest.com"{
-	type master;
+	type primary;
 	file "wtest.com";
 };
 
 zone "nztest.com"{
-	type master;
+	type secondary;
 	file "nztest.com";
+	primaries { 1.2.3.4:5678; };
 };
 
 zone "dnssec-parent.com"{
-	type master;
+	type primary;
 	file "dnssec-parent.com";
 };
 
 zone "delegated.dnssec-parent.com"{
-	type master;
+	type primary;
 	file "delegated.dnssec-parent.com";
 };
 
 zone "secure-delegated.dnssec-parent.com"{
-	type master;
+	type primary;
 	file "secure-delegated.dnssec-parent.com";
 };
 
 zone "minimal.com"{
-	type master;
+	type primary;
 	file "minimal.com";
 };
 
 zone "tsig.com"{
-	type master;
+	type primary;
 	file "tsig.com";
 };
 
 zone "stest.com"{
-	type master;
+	type primary;
 	file "stest.com";
 };

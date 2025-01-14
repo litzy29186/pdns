@@ -56,7 +56,11 @@ __pycache__
 .circleci/config.yml-local
 .env
 compile_commands.*
-/.cache
+.cache
 /.clang-tidy
+.ccls-cache
 .gdb_history
 .venv
+
+# Local Netlify folder
+.netlify

@@ -24,12 +24,13 @@
 #include <stdio.h>
 #include <string>
 
+#include "pdns/misc.hh"
 #include "pdns/namespaces.hh"
 
 class CoRemote
 {
 public:
-  virtual ~CoRemote() {}
+  virtual ~CoRemote() = default;
   virtual void sendReceive(const string& send, string& receive) = 0;
   virtual void receive(string& rcv) = 0;
   virtual void send(const string& send) = 0;
@@ -39,7 +40,7 @@ class CoProcess : public CoRemote
 {
 public:
   CoProcess(const string& command, int timeout = 0, int infd = 0, int outfd = 1);
-  ~CoProcess();
+  ~CoProcess() override;
   void sendReceive(const string& send, string& receive) override;
   void receive(string& rcv) override;
   void send(const string& send) override;
@@ -60,13 +61,13 @@ private:
 class UnixRemote : public CoRemote
 {
 public:
-  UnixRemote(const string& path, int timeout = 0);
+  UnixRemote(const string& path);
   void sendReceive(const string& send, string& receive) override;
   void receive(string& rcv) override;
   void send(const string& send) override;
 
 private:
   int d_fd;
-  std::unique_ptr<FILE, int (*)(FILE*)> d_fp{nullptr, fclose};
+  pdns::UniqueFilePtr d_fp{nullptr};
 };
 bool isUnixSocket(const string& fname);

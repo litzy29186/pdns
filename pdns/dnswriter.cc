@@ -33,10 +33,10 @@
 #include <limits.h>
 
 /* d_content:                                      <---- d_stuff ---->
-                                      v d_truncatemarker  
+                                      v d_truncatemarker
    dnsheader | qname | qtype | qclass | {recordname| dnsrecordheader | record }
-                                        ^ d_rollbackmarker           ^ d_sor 
-    
+                                        ^ d_rollbackmarker           ^ d_sor
+
 
 */
 
@@ -213,15 +213,12 @@ template <typename Container> uint16_t GenericDNSPacketWriter<Container>::lookup
 
   /* name might be a.root-servers.net, we need to be able to benefit from finding:
      b.root-servers.net, or even:
-     b\xc0\x0c 
+     b\xc0\x0c
   */
   unsigned int bestpos=0;
   *matchLen=0;
-#if BOOST_VERSION >= 105400
-  boost::container::static_vector<uint16_t, 34> nvect, pvect;
-#else
-  vector<uint16_t> nvect, pvect;
-#endif
+  boost::container::static_vector<uint16_t, 34> nvect;
+  boost::container::static_vector<uint16_t, 34> pvect;
 
   try {
     for(auto riter= raw.cbegin(); riter < raw.cend(); ) {
@@ -236,10 +233,10 @@ template <typename Container> uint16_t GenericDNSPacketWriter<Container>::lookup
       cout<<"Domain "<<name<<" too large to compress"<<endl;
     return 0;
   }
-  
+
   if(l_verbose) {
     cout<<"Input vector for lookup "<<name<<": ";
-    for(const auto n : nvect) 
+    for(const auto n : nvect)
       cout << n<<" ";
     cout<<endl;
     cout<<makeHexDump(string(raw.c_str(), raw.c_str()+raw.size()))<<endl;
@@ -285,7 +282,7 @@ template <typename Container> uint16_t GenericDNSPacketWriter<Container>::lookup
     }
     if(l_verbose) {
       cout<<"Packet vector: "<<endl;
-      for(const auto n : pvect) 
+      for(const auto n : pvect)
         cout << n<<" ";
       cout<<endl;
     }
@@ -334,7 +331,7 @@ template <typename Container> void GenericDNSPacketWriter<Container>::xfrName(co
   uint16_t li=0;
   uint16_t matchlen=0;
   if(d_compress && compress && (li=lookupName(name, &matchlen)) && li < maxCompressionOffset) {
-    const auto& dns=name.getStorage(); 
+    const auto& dns=name.getStorage();
     if(l_verbose)
       cout<<"Found a substring of "<<matchlen<<" bytes from the back, offset: "<<li<<", dnslen: "<<dns.size()<<endl;
     // found a substring, if www.powerdns.com matched powerdns.com, we get back matchlen = 13
@@ -392,7 +389,7 @@ template <typename Container> void GenericDNSPacketWriter<Container>::xfrBlobNoS
   xfrBlob(blob);
 }
 
-template <typename Container> void GenericDNSPacketWriter<Container>::xfrHexBlob(const string& blob, bool keepReading)
+template <typename Container> void GenericDNSPacketWriter<Container>::xfrHexBlob(const string& blob, bool /* keepReading */)
 {
   xfrBlob(blob);
 }
@@ -458,6 +455,12 @@ template <typename Container> void GenericDNSPacketWriter<Container>::xfrSvcPara
 template <typename Container> void GenericDNSPacketWriter<Container>::getRecordPayload(string& records)
 {
   records.assign(d_content.begin() + d_sor, d_content.end());
+}
+
+// call __before commit__
+template <typename Container> void GenericDNSPacketWriter<Container>::getWireFormatContent(string& record)
+{
+  record.assign(d_content.begin() + d_rollbackmarker, d_content.end());
 }
 
 template <typename Container> uint32_t GenericDNSPacketWriter<Container>::size() const

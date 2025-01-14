@@ -31,9 +31,11 @@
 #include "lock.hh"
 #include "arguments.hh"
 #include "statbag.hh"
+#include "sha.hh"
+
 extern StatBag S;
 
-typedef map<pair<string, string>, string> signaturecache_t;
+using signaturecache_t = map<pair<string, string>, string>;
 static SharedLockGuarded<signaturecache_t> g_signatures;
 static int g_cacheweekno;
 
@@ -43,10 +45,10 @@ AtomicCounter* g_signatureCount;
 static std::string getLookupKeyFromMessage(const std::string& msg)
 {
   try {
-    return pdns_md5(msg);
+    return pdns::md5(msg);
   }
   catch(const std::runtime_error& e) {
-    return pdns_sha1(msg);
+    return pdns::sha1(msg);
   }
 }
 
@@ -58,7 +60,7 @@ static std::string getLookupKeyFromPublicKey(const std::string& pubKey)
   if (pubKey.size() <= 64) {
     return pubKey;
   }
-  return pdns_sha1sum(pubKey);
+  return pdns::sha1sum(pubKey);
 }
 
 static void fillOutRRSIG(DNSSECPrivateKey& dpk, const DNSName& signQName, RRSIGRecordContent& rrc, const sortedRecords_t& toSign)
@@ -88,7 +90,7 @@ static void fillOutRRSIG(DNSSECPrivateKey& dpk, const DNSName& signQName, RRSIGR
   rrc.d_signature = rc->sign(msg);
   (*g_signatureCount)++;
   if(doCache) {
-    /* we add some jitter here so not all your slaves start pruning their caches at the very same millisecond */
+    /* we add some jitter here so not all your secondaries start pruning their caches at the very same millisecond */
     int weekno = (time(nullptr) - dns_random(3600)) / (86400*7);  // we just spent milliseconds doing a signature, microsecond more won't kill us
     const static int maxcachesize=::arg().asNum("max-signature-cache-entries", INT_MAX);
 
@@ -114,7 +116,7 @@ static int getRRSIGsForRRSET(DNSSECKeeper& dk, const DNSName& signer, const DNSN
   rrc.d_type=signQType;
 
   rrc.d_labels=signQName.countLabels()-signQName.isWildcard();
-  rrc.d_originalttl=signTTL; 
+  rrc.d_originalttl=signTTL;
   rrc.d_siginception=startOfWeek - 7*86400; // XXX should come from zone metadata
   rrc.d_sigexpire=startOfWeek + 14*86400;
   rrc.d_signer = signer;
@@ -143,7 +145,7 @@ static int getRRSIGsForRRSET(DNSSECKeeper& dk, const DNSName& signer, const DNSN
 // this is the entrypoint from DNSPacket
 static void addSignature(DNSSECKeeper& dk, UeberBackend& db, const DNSName& signer, const DNSName& signQName, const DNSName& wildcardname, uint16_t signQType,
                          uint32_t signTTL, DNSResourceRecord::Place signPlace,
-                         sortedRecords_t& toSign, vector<DNSZoneRecord>& outsigned, uint32_t origTTL)
+                         sortedRecords_t& toSign, vector<DNSZoneRecord>& outsigned, uint32_t origTTL, DNSPacket* packet)
 {
   //cerr<<"Asked to sign '"<<signQName<<"'|"<<DNSRecordContent::NumberToType(signQType)<<", "<<toSign.size()<<" records\n";
   if(toSign.empty())
@@ -151,14 +153,14 @@ static void addSignature(DNSSECKeeper& dk, UeberBackend& db, const DNSName& sign
   vector<RRSIGRecordContent> rrcs;
   if(dk.isPresigned(signer)) {
     //cerr<<"Doing presignatures"<<endl;
-    dk.getPreRRSIGs(db, outsigned, origTTL); // does it all
+    dk.getPreRRSIGs(db, outsigned, origTTL, packet); // does it all
   }
   else {
     if(getRRSIGsForRRSET(dk, signer, wildcardname.countLabels() ? wildcardname : signQName, signQType, signTTL, toSign, rrcs) < 0)  {
       // cerr<<"Error signing a record!"<<endl;
       return;
-    } 
-  
+    }
+
     DNSZoneRecord rr;
     rr.dr.d_name=signQName;
     rr.dr.d_type=QType::RRSIG;
@@ -169,14 +171,14 @@ static void addSignature(DNSSECKeeper& dk, UeberBackend& db, const DNSName& sign
     rr.auth=false;
     rr.dr.d_place = signPlace;
     for(RRSIGRecordContent& rrc :  rrcs) {
-      rr.dr.d_content = std::make_shared<RRSIGRecordContent>(rrc);
+      rr.dr.setContent(std::make_shared<RRSIGRecordContent>(rrc));
       outsigned.push_back(rr);
     }
   }
   toSign.clear();
 }
 
-uint64_t signatureCacheSize(const std::string& str)
+uint64_t signatureCacheSize(const std::string& /* str */)
 {
   return g_signatures.read_lock()->size();
 }
@@ -197,19 +199,19 @@ static bool getBestAuthFromSet(const set<DNSName>& authSet, const DNSName& name,
     }
   }
   while(sname.chopOff());
-  
+
   return false;
 }
 
-void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const set<DNSName>& authSet, vector<DNSZoneRecord>& rrs)
+void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const set<DNSName>& authSet, vector<DNSZoneRecord>& rrs, DNSPacket* packet)
 {
   stable_sort(rrs.begin(), rrs.end(), rrsigncomp);
-  
-  DNSName signQName, wildcardQName;
+
+  DNSName authQName, signQName, wildcardQName;
   uint16_t signQType=0;
   uint32_t signTTL=0;
   uint32_t origTTL=0;
-  
+
   DNSResourceRecord::Place signPlace=DNSResourceRecord::ANSWER;
   sortedRecords_t toSign;
 
@@ -219,11 +221,17 @@ void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const set<DNSName>& authSet, 
   DNSName signer;
   for(auto pos = rrs.cbegin(); pos != rrs.cend(); ++pos) {
     if(pos != rrs.cbegin() && (signQType != pos->dr.d_type  || signQName != pos->dr.d_name)) {
-      if(getBestAuthFromSet(authSet, signQName, signer))
-        addSignature(dk, db, signer, signQName, wildcardQName, signQType, signTTL, signPlace, toSign, signedRecords, origTTL);
+      if (getBestAuthFromSet(authSet, authQName, signer))
+        addSignature(dk, db, signer, signQName, wildcardQName, signQType, signTTL, signPlace, toSign, signedRecords, origTTL, packet);
     }
     signedRecords.push_back(*pos);
-    signQName= pos->dr.d_name.makeLowerCase();
+    signQName = pos->dr.d_name.makeLowerCase();
+    if (pos->dr.d_type == QType::NSEC) {
+      authQName = signQName.getCommonLabels(getRR<NSECRecordContent>(pos->dr)->d_next);
+    }
+    else {
+      authQName = signQName;
+    }
     if(!pos->wildcardname.empty())
       wildcardQName = pos->wildcardname.makeLowerCase();
     else
@@ -236,10 +244,10 @@ void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const set<DNSName>& authSet, 
     origTTL = pos->dr.d_ttl;
     signPlace = pos->dr.d_place;
     if(pos->auth || pos->dr.d_type == QType::DS) {
-      toSign.insert(pos->dr.d_content); // so ponder.. should this be a deep copy perhaps?
+      toSign.insert(pos->dr.getContent()); // so ponder.. should this be a deep copy perhaps?
     }
   }
-  if(getBestAuthFromSet(authSet, signQName, signer))
-    addSignature(dk, db, signer, signQName, wildcardQName, signQType, signTTL, signPlace, toSign, signedRecords, origTTL);
+  if (getBestAuthFromSet(authSet, authQName, signer))
+    addSignature(dk, db, signer, signQName, wildcardQName, signQType, signTTL, signPlace, toSign, signedRecords, origTTL, packet);
   rrs.swap(signedRecords);
 }

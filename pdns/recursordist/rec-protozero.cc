@@ -24,7 +24,7 @@
 #include "rec-protozero.hh"
 #include <variant>
 
-void pdns::ProtoZero::RecMessage::addRR(const DNSRecord& record, const std::set<uint16_t>& exportTypes, bool udr)
+void pdns::ProtoZero::RecMessage::addRR(const DNSRecord& record, const std::set<uint16_t>& exportTypes, [[maybe_unused]] std::optional<bool> udr)
 {
   if (record.d_place != DNSResourceRecord::ANSWER || record.d_class != QClass::IN) {
     return;
@@ -49,100 +49,153 @@ void pdns::ProtoZero::RecMessage::addRR(const DNSRecord& record, const std::set<
 
   switch (record.d_type) {
   case QType::A: {
-    const auto& content = dynamic_cast<const ARecordContent&>(*(record.d_content));
-    ComboAddress data = content.getCA();
-    pbf_rr.add_bytes(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::rdata), reinterpret_cast<const char*>(&data.sin4.sin_addr.s_addr), sizeof(data.sin4.sin_addr.s_addr));
+    const auto& content = getRR<ARecordContent>(record);
+    if (!content) {
+      return;
+    }
+    ComboAddress data = content->getCA();
+    pbf_rr.add_bytes(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::rdata), reinterpret_cast<const char*>(&data.sin4.sin_addr.s_addr), sizeof(data.sin4.sin_addr.s_addr)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast): it's the API
     break;
   }
   case QType::AAAA: {
-    const auto& content = dynamic_cast<const AAAARecordContent&>(*(record.d_content));
-    ComboAddress data = content.getCA();
-    pbf_rr.add_bytes(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::rdata), reinterpret_cast<const char*>(&data.sin6.sin6_addr.s6_addr), sizeof(data.sin6.sin6_addr.s6_addr));
+    const auto& content = getRR<AAAARecordContent>(record);
+    if (!content) {
+      return;
+    }
+    ComboAddress data = content->getCA();
+    pbf_rr.add_bytes(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::rdata), reinterpret_cast<const char*>(&data.sin6.sin6_addr.s6_addr), sizeof(data.sin6.sin6_addr.s6_addr)); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast): it's the API
     break;
   }
   case QType::CNAME: {
-    const auto& content = dynamic_cast<const CNAMERecordContent&>(*(record.d_content));
-    add(content.getTarget().toString());
+    const auto& content = getRR<CNAMERecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getTarget().toString());
     break;
   }
   case QType::TXT: {
-    const auto& content = dynamic_cast<const TXTRecordContent&>(*(record.d_content));
-    add(content.d_text);
+    const auto& content = getRR<TXTRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->d_text);
     break;
   }
   case QType::NS: {
-    const auto& content = dynamic_cast<const NSRecordContent&>(*(record.d_content));
-    add(content.getNS().toString());
+    const auto& content = getRR<NSRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getNS().toString());
     break;
   }
   case QType::PTR: {
-    const auto& content = dynamic_cast<const PTRRecordContent&>(*(record.d_content));
-    add(content.getContent().toString());
+    const auto& content = getRR<PTRRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getContent().toString());
     break;
   }
   case QType::MX: {
-    const auto& content = dynamic_cast<const MXRecordContent&>(*(record.d_content));
-    add(content.d_mxname.toString());
+    const auto& content = getRR<MXRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->d_mxname.toString());
     break;
   }
   case QType::SPF: {
-    const auto& content = dynamic_cast<const SPFRecordContent&>(*(record.d_content));
-    add(content.getText());
+    const auto& content = getRR<SPFRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getText());
     break;
   }
   case QType::SRV: {
-    const auto& content = dynamic_cast<const SRVRecordContent&>(*(record.d_content));
-    add(content.d_target.toString());
+    const auto& content = getRR<SRVRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->d_target.toString());
+    break;
+  }
+  case QType::SVCB: {
+    const auto& content = getRR<SVCBRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getZoneRepresentation());
+    break;
+  }
+  case QType::HTTPS: {
+    const auto& content = getRR<HTTPSRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getZoneRepresentation());
+    break;
+  }
+  case QType::NAPTR: {
+    const auto& content = getRR<NAPTRRecordContent>(record);
+    if (!content) {
+      return;
+    }
+    add(content->getZoneRepresentation());
     break;
   }
   default:
     break;
   }
 #ifdef NOD_ENABLED
-  pbf_rr.add_bool(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::udr), udr);
-  pbf_rr.commit();
+  if (udr) {
+    pbf_rr.add_bool(static_cast<protozero::pbf_tag_type>(pdns::ProtoZero::Message::RRField::udr), *udr);
+    pbf_rr.commit();
 
-  // Save the offset of the byte containing the just added bool. We can do this since
-  // we know a bit about how protobuf's encoding works.
-  offsets.push_back(d_rspbuf.length() - 1);
+    // Save the offset of the byte containing the just added bool. We can do this since
+    // we know a bit about how protobuf's encoding works.
+    offsets.push_back(d_rspbuf.length() - 1);
+  }
 #endif
 }
 
 #ifdef NOD_ENABLED
 void pdns::ProtoZero::RecMessage::clearUDR(std::string& str)
 {
-  for (auto i : offsets) {
-    str.at(i) = 0;
+  for (auto offset : offsets) {
+    str.at(offset) = 0;
   }
 }
 #endif
 
 void pdns::ProtoZero::RecMessage::addEvents(const RecEventTrace& trace)
 {
-  for (const auto& t : trace.getEvents()) {
+  for (const auto& event : trace.getEvents()) {
     protozero::pbf_writer pbf_trace{d_message, static_cast<protozero::pbf_tag_type>(Field::trace)};
-    pbf_trace.add_int64(static_cast<protozero::pbf_tag_type>(Event::ts), t.d_ts);
-    pbf_trace.add_uint32(static_cast<protozero::pbf_tag_type>(Event::event), t.d_event);
-    pbf_trace.add_bool(static_cast<protozero::pbf_tag_type>(Event::start), t.d_start);
+    pbf_trace.add_int64(static_cast<protozero::pbf_tag_type>(Event::ts), event.d_ts);
+    pbf_trace.add_uint32(static_cast<protozero::pbf_tag_type>(Event::event), event.d_event);
+    pbf_trace.add_bool(static_cast<protozero::pbf_tag_type>(Event::start), event.d_start);
 
-    const auto& v = t.d_value;
-    if (std::holds_alternative<std::nullopt_t>(v)) {
+    const auto& value = event.d_value;
+    if (std::holds_alternative<std::nullopt_t>(value)) {
     }
-    else if (std::holds_alternative<bool>(v)) {
-      pbf_trace.add_bool(static_cast<protozero::pbf_tag_type>(Event::boolVal), std::get<bool>(v));
+    else if (std::holds_alternative<bool>(value)) {
+      pbf_trace.add_bool(static_cast<protozero::pbf_tag_type>(Event::boolVal), std::get<bool>(value));
     }
-    else if (std::holds_alternative<int64_t>(v)) {
-      pbf_trace.add_int64(static_cast<protozero::pbf_tag_type>(Event::intVal), std::get<int64_t>(v));
+    else if (std::holds_alternative<int64_t>(value)) {
+      pbf_trace.add_int64(static_cast<protozero::pbf_tag_type>(Event::intVal), std::get<int64_t>(value));
     }
-    else if (std::holds_alternative<std::string>(v)) {
-      pbf_trace.add_string(static_cast<protozero::pbf_tag_type>(Event::stringVal), std::get<std::string>(v));
+    else if (std::holds_alternative<std::string>(value)) {
+      pbf_trace.add_string(static_cast<protozero::pbf_tag_type>(Event::stringVal), std::get<std::string>(value));
     }
-    else if (std::holds_alternative<PacketBuffer>(v)) {
-      const PacketBuffer& p = std::get<PacketBuffer>(v);
-      pbf_trace.add_bytes(static_cast<protozero::pbf_tag_type>(Event::bytesVal), reinterpret_cast<const char*>(p.data()), p.size());
+    else if (std::holds_alternative<PacketBuffer>(value)) {
+      const auto& packetBuffer = std::get<PacketBuffer>(value);
+      pbf_trace.add_bytes(static_cast<protozero::pbf_tag_type>(Event::bytesVal), reinterpret_cast<const char*>(packetBuffer.data()), packetBuffer.size()); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast): it's the API
     }
-    if (!t.d_custom.empty()) {
-      pbf_trace.add_string(static_cast<protozero::pbf_tag_type>(Event::custom), t.d_custom);
+    if (!event.d_custom.empty()) {
+      pbf_trace.add_string(static_cast<protozero::pbf_tag_type>(Event::custom), event.d_custom);
     }
   }
 }

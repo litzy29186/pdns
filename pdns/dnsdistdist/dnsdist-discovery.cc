@@ -22,6 +22,7 @@
 
 #include "config.h"
 #include "dnsdist-discovery.hh"
+#include "dnsdist-backend.hh"
 #include "dnsdist.hh"
 #include "dnsdist-random.hh"
 #include "dnsparser.hh"
@@ -38,7 +39,7 @@ const uint16_t ServiceDiscovery::s_defaultDoHSVCKey{7};
 
 bool ServiceDiscovery::addUpgradeableServer(std::shared_ptr<DownstreamState>& server, uint32_t interval, std::string poolAfterUpgrade, uint16_t dohSVCKey, bool keepAfterUpgrade)
 {
-  s_upgradeableBackends.lock()->push_back(std::make_shared<UpgradeableBackend>(UpgradeableBackend{server, poolAfterUpgrade, 0, interval, dohSVCKey, keepAfterUpgrade}));
+  s_upgradeableBackends.lock()->push_back(std::make_shared<UpgradeableBackend>(UpgradeableBackend{server, std::move(poolAfterUpgrade), 0, interval, dohSVCKey, keepAfterUpgrade}));
   return true;
 }
 
@@ -52,7 +53,7 @@ struct DesignatedResolvers
 static bool parseSVCParams(const PacketBuffer& answer, std::map<uint16_t, DesignatedResolvers>& resolvers)
 {
   std::map<DNSName, std::vector<ComboAddress>> hints;
-  const struct dnsheader* dh = reinterpret_cast<const struct dnsheader*>(answer.data());
+  const dnsheader_aligned dh(answer.data());
   PacketReader pr(std::string_view(reinterpret_cast<const char*>(answer.data()), answer.size()));
   uint16_t qdcount = ntohs(dh->qdcount);
   uint16_t ancount = ntohs(dh->ancount);
@@ -226,7 +227,7 @@ static bool handleSVCResult(const PacketBuffer& answer, const ComboAddress& exis
     tempConfig.d_subjectName = resolver.target.toStringNoDot();
     tempConfig.d_addr.sin4.sin_port = tempConfig.d_port;
 
-    config = tempConfig;
+    config = std::move(tempConfig);
     return true;
   }
 
@@ -235,6 +236,7 @@ static bool handleSVCResult(const PacketBuffer& answer, const ComboAddress& exis
 
 bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeableBackend, ServiceDiscovery::DiscoveredResolverConfig& config)
 {
+  const auto verbose = dnsdist::configuration::getCurrentRuntimeConfiguration().d_verbose;
   const auto& backend = upgradeableBackend.d_ds;
   const auto& addr = backend->d_config.remote;
   try {
@@ -272,10 +274,11 @@ bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeable
 
     sock.writenWithTimeout(reinterpret_cast<const char*>(packet.data()), packet.size(), backend->d_config.tcpSendTimeout);
 
+    const struct timeval remainingTime = {.tv_sec = backend->d_config.tcpRecvTimeout, .tv_usec = 0};
     uint16_t responseSize = 0;
-    auto got = sock.readWithTimeout(reinterpret_cast<char*>(&responseSize), sizeof(responseSize), backend->d_config.tcpRecvTimeout);
-    if (got < 0 || static_cast<size_t>(got) != sizeof(responseSize)) {
-      if (g_verbose) {
+    auto got = readn2WithTimeout(sock.getHandle(), &responseSize, sizeof(responseSize), remainingTime);
+    if (got != sizeof(responseSize)) {
+      if (verbose) {
         warnlog("Error while waiting for the ADD upgrade response size from backend %s: %d", addr.toStringWithPort(), got);
       }
       return false;
@@ -283,16 +286,16 @@ bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeable
 
     packet.resize(ntohs(responseSize));
 
-    got = sock.readWithTimeout(reinterpret_cast<char*>(packet.data()), packet.size(), backend->d_config.tcpRecvTimeout);
-    if (got < 0 || static_cast<size_t>(got) != packet.size()) {
-      if (g_verbose) {
+    got = readn2WithTimeout(sock.getHandle(), packet.data(), packet.size(), remainingTime);
+    if (got != packet.size()) {
+      if (verbose) {
         warnlog("Error while waiting for the ADD upgrade response from backend %s: %d", addr.toStringWithPort(), got);
       }
       return false;
     }
 
     if (packet.size() <= sizeof(struct dnsheader)) {
-      if (g_verbose) {
+      if (verbose) {
         warnlog("Too short answer of size %d received from the backend %s", packet.size(), addr.toStringWithPort());
       }
       return false;
@@ -301,14 +304,14 @@ bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeable
     struct dnsheader d;
     memcpy(&d, packet.data(), sizeof(d));
     if (d.id != id) {
-      if (g_verbose) {
+      if (verbose) {
         warnlog("Invalid ID (%d / %d) received from the backend %s", d.id, id, addr.toStringWithPort());
       }
       return false;
     }
 
     if (d.rcode != RCode::NoError) {
-      if (g_verbose) {
+      if (verbose) {
         warnlog("Response code '%s' received from the backend %s for '%s'", RCode::to_s(d.rcode), addr.toStringWithPort(), s_discoveryDomain);
       }
 
@@ -316,7 +319,7 @@ bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeable
     }
 
     if (ntohs(d.qdcount) != 1) {
-      if (g_verbose) {
+      if (verbose) {
         warnlog("Invalid answer (qdcount %d) received from the backend %s", ntohs(d.qdcount), addr.toStringWithPort());
       }
       return false;
@@ -327,7 +330,7 @@ bool ServiceDiscovery::getDiscoveredConfig(const UpgradeableBackend& upgradeable
     DNSName receivedName(reinterpret_cast<const char*>(packet.data()), packet.size(), sizeof(dnsheader), false, &receivedType, &receivedClass);
 
     if (receivedName != s_discoveryDomain || receivedType != s_discoveryType || receivedClass != QClass::IN) {
-      if (g_verbose) {
+      if (verbose) {
         warnlog("Invalid answer, either the qname (%s / %s), qtype (%s / %s) or qclass (%s / %s) does not match, received from the backend %s", receivedName, s_discoveryDomain, QType(receivedType).toString(), s_discoveryType.toString(), QClass(receivedClass).toString(), QClass::IN.toString(), addr.toStringWithPort());
       }
       return false;
@@ -367,8 +370,7 @@ static bool checkBackendUsability(std::shared_ptr<DownstreamState>& ds)
       sock.bind(ds->d_config.sourceAddr);
     }
 
-    time_t now = time(nullptr);
-    auto handler = std::make_unique<TCPIOHandler>(ds->d_config.d_tlsSubjectName, ds->d_config.d_tlsSubjectIsAddr, sock.releaseHandle(), timeval{ds->d_config.checkTimeout, 0}, ds->d_tlsCtx, now);
+    auto handler = std::make_unique<TCPIOHandler>(ds->d_config.d_tlsSubjectName, ds->d_config.d_tlsSubjectIsAddr, sock.releaseHandle(), timeval{ds->d_config.checkTimeout, 0}, ds->d_tlsCtx);
     handler->connect(ds->d_config.tcpFastOpen, ds->d_config.remote, timeval{ds->d_config.checkTimeout, 0});
     return true;
   }
@@ -447,42 +449,38 @@ bool ServiceDiscovery::tryToUpgradeBackend(const UpgradeableBackend& backend)
 
     infolog("Added automatically upgraded server %s", newServer->getNameWithAddr());
 
-    auto localPools = g_pools.getCopy();
     if (!newServer->d_config.pools.empty()) {
       for (const auto& poolName : newServer->d_config.pools) {
-        addServerToPool(localPools, poolName, newServer);
+        addServerToPool(poolName, newServer);
       }
     }
     else {
-      addServerToPool(localPools, "", newServer);
+      addServerToPool("", newServer);
     }
 
     newServer->start();
 
-    auto states = g_dstates.getCopy();
-    states.push_back(newServer);
     /* remove the existing backend if needed */
     if (!backend.keepAfterUpgrade) {
-      for (auto it = states.begin(); it != states.end(); ++it) {
-        if (*it == backend.d_ds) {
-          states.erase(it);
-          break;
+      dnsdist::configuration::updateRuntimeConfiguration([&backend](dnsdist::configuration::RuntimeConfiguration& runtimeConfig) {
+        auto& backends = runtimeConfig.d_backends;
+        for (auto backendIt = backends.begin(); backendIt != backends.end(); ++backendIt) {
+          if (*backendIt == backend.d_ds) {
+            backends.erase(backendIt);
+            break;
+          }
         }
-      }
+      });
 
       for (const string& poolName : backend.d_ds->d_config.pools) {
-        removeServerFromPool(localPools, poolName, backend.d_ds);
+        removeServerFromPool(poolName, backend.d_ds);
       }
       /* the server might also be in the default pool */
-      removeServerFromPool(localPools, "", backend.d_ds);
+      removeServerFromPool("", backend.d_ds);
     }
 
-    std::stable_sort(states.begin(), states.end(), [](const decltype(newServer)& a, const decltype(newServer)& b) {
-      return a->d_config.order < b->d_config.order;
-    });
+    dnsdist::backend::registerNewBackend(newServer);
 
-    g_pools.setState(localPools);
-    g_dstates.setState(states);
     if (!backend.keepAfterUpgrade) {
       backend.d_ds->stop();
     }

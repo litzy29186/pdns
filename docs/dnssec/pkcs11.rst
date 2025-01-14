@@ -2,7 +2,7 @@ PKCS#11 support
 ===============
 
 .. note::
-  This feature is experimental, use at your own risk!
+  This is an experimental feature, use at your own risk!
 
 To enable it, compile PowerDNS Authoritative Server using ``--enable-experimental-pkcs11`` flag on configure.
 This requires you to have the p11-kit libraries and headers.
@@ -174,4 +174,4 @@ Smart Card token on Ubuntu 14.04.
     pdnsutil show-zone zone
 
 - Note that the physical token is pretty slow, so you have to use it as
-  hidden master. It has been observed to produce about 1.5 signatures/second.
+  hidden primary. It has been observed to produce about 1.5 signatures/second.

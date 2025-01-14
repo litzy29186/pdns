@@ -56,6 +56,7 @@
 #include <boost/format.hpp>
 #include "iputils.hh"
 #include "dnsparser.hh"
+#include "dns_random.hh"
 #include <pwd.h>
 #include <grp.h>
 #include <climits>
@@ -94,24 +95,26 @@ size_t writen2(int fileDesc, const void *buf, size_t count)
   return count;
 }
 
-size_t readn2(int fd, void* buffer, size_t len)
+size_t readn2(int fileDesc, void* buffer, size_t len)
 {
-  size_t pos=0;
-  ssize_t res;
-  for(;;) {
-    res = read(fd, (char*)buffer + pos, len - pos);
-    if(res == 0)
+  size_t pos = 0;
+
+  for (;;) {
+    auto res = read(fileDesc, static_cast<char *>(buffer) + pos, len - pos); // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic): it's the API
+    if (res == 0) {
       throw runtime_error("EOF while reading message");
-    if(res < 0) {
-      if (errno == EAGAIN)
+    }
+    if (res < 0) {
+      if (errno == EAGAIN) {
         throw std::runtime_error("used readn2 on non-blocking socket, got EAGAIN");
-      else
-        unixDie("failed in readn2");
+      }
+      unixDie("failed in readn2");
     }
 
-    pos+=(size_t)res;
-    if(pos == len)
+    pos += static_cast<size_t>(res);
+    if (pos == len) {
       break;
+    }
   }
   return len;
 }
@@ -281,7 +284,7 @@ auto pdns::OpenSSL::error(const std::string& errorMessage) -> std::runtime_error
     }
   }
 #endif
-  return std::runtime_error(fullErrorMessage);
+  return std::runtime_error{fullErrorMessage};
 }
 
 auto pdns::OpenSSL::error(const std::string& componentName, const std::string& errorMessage) -> std::runtime_error
@@ -432,41 +435,46 @@ int waitForMultiData(const set<int>& fds, const int seconds, const int useconds,
     }
   }
   set<int>::const_iterator it(pollinFDs.begin());
-  advance(it, random() % pollinFDs.size());
+  advance(it, dns_random(pollinFDs.size()));
   *fdOut = *it;
   return 1;
 }
 
 // returns -1 in case of error, 0 if no data is available, 1 if there is. In the first two cases, errno is set
-int waitFor2Data(int fd1, int fd2, int seconds, int useconds, int*fd)
+int waitFor2Data(int fd1, int fd2, int seconds, int useconds, int* fdPtr)
 {
-  int ret;
-
-  struct pollfd pfds[2];
-  memset(&pfds[0], 0, 2*sizeof(struct pollfd));
+  std::array<pollfd,2> pfds{};
+  memset(pfds.data(), 0, pfds.size() * sizeof(struct pollfd));
   pfds[0].fd = fd1;
   pfds[1].fd = fd2;
 
   pfds[0].events= pfds[1].events = POLLIN;
 
-  int nsocks = 1 + (fd2 >= 0); // fd2 can optionally be -1
+  int nsocks = 1 + static_cast<int>(fd2 >= 0); // fd2 can optionally be -1
 
-  if(seconds >= 0)
-    ret = poll(pfds, nsocks, seconds * 1000 + useconds/1000);
-  else
-    ret = poll(pfds, nsocks, -1);
-  if(!ret || ret < 0)
-    return ret;
-
-  if((pfds[0].revents & POLLIN) && !(pfds[1].revents & POLLIN))
-    *fd = pfds[0].fd;
-  else if((pfds[1].revents & POLLIN) && !(pfds[0].revents & POLLIN))
-    *fd = pfds[1].fd;
-  else if(ret == 2) {
-    *fd = pfds[random()%2].fd;
+  int ret{};
+  if (seconds >= 0) {
+    ret = poll(pfds.data(), nsocks, seconds * 1000 + useconds / 1000);
   }
-  else
-    *fd = -1; // should never happen
+  else {
+    ret = poll(pfds.data(), nsocks, -1);
+  }
+  if (ret <= 0) {
+    return ret;
+  }
+
+  if ((pfds[0].revents & POLLIN) != 0 && (pfds[1].revents & POLLIN) == 0) {
+    *fdPtr = pfds[0].fd;
+  }
+  else if ((pfds[1].revents & POLLIN) != 0 && (pfds[0].revents & POLLIN) == 0) {
+    *fdPtr = pfds[1].fd;
+  }
+  else if(ret == 2) {
+    *fdPtr = pfds.at(dns_random_uint32() % 2).fd;
+  }
+  else {
+    *fdPtr = -1; // should never happen
+  }
 
   return 1;
 }
@@ -576,16 +584,24 @@ string bitFlip(const string &str)
 
 void cleanSlashes(string &str)
 {
-  string::const_iterator i;
   string out;
-  for(i=str.begin();i!=str.end();++i) {
-    if(*i=='/' && i!=str.begin() && *(i-1)=='/')
-      continue;
-    out.append(1,*i);
+  bool keepNextSlash = true;
+  for (const auto& value : str) {
+    if (value == '/') {
+      if (keepNextSlash) {
+        keepNextSlash = false;
+      }
+      else {
+        continue;
+      }
+    }
+    else {
+      keepNextSlash = true;
+    }
+    out.append(1, value);
   }
-  str=out;
+  str = std::move(out);
 }
-
 
 bool IpToU32(const string &str, uint32_t *ip)
 {
@@ -847,11 +863,11 @@ bool stringfgets(FILE* fp, std::string& line)
 bool readFileIfThere(const char* fname, std::string* line)
 {
   line->clear();
-  auto fp = std::unique_ptr<FILE, int(*)(FILE*)>(fopen(fname, "r"), fclose);
-  if (!fp) {
+  auto filePtr = pdns::UniqueFilePtr(fopen(fname, "r"));
+  if (!filePtr) {
     return false;
   }
-  return stringfgets(fp.get(), *line);
+  return stringfgets(filePtr.get(), *line);
 }
 
 Regex::Regex(const string &expr)
@@ -1014,7 +1030,7 @@ bool isNonBlocking(int sock)
   return flags & O_NONBLOCK;
 }
 
-bool setReceiveSocketErrors(int sock, int af)
+bool setReceiveSocketErrors([[maybe_unused]] int sock, [[maybe_unused]] int af)
 {
 #ifdef __linux__
   int tmp = 1, ret;
@@ -1159,7 +1175,7 @@ int getMACAddress(const ComboAddress& ca, char* dest, size_t destLen)
   return foundMAC ? 0 : ENOENT;
 }
 #else
-int getMACAddress(const ComboAddress& ca, char* dest, size_t len)
+int getMACAddress(const ComboAddress& /* ca */, char* /* dest */, size_t /* len */)
 {
   return ENOENT;
 }
@@ -1175,7 +1191,7 @@ string getMACAddress(const ComboAddress& ca)
   return ret;
 }
 
-uint64_t udpErrorStats(const std::string& str)
+uint64_t udpErrorStats([[maybe_unused]] const std::string& str)
 {
 #ifdef __linux__
   ifstream ifs("/proc/net/snmp");
@@ -1217,7 +1233,7 @@ uint64_t udpErrorStats(const std::string& str)
   return 0;
 }
 
-uint64_t udp6ErrorStats(const std::string& str)
+uint64_t udp6ErrorStats([[maybe_unused]] const std::string& str)
 {
 #ifdef __linux__
   const std::map<std::string, std::string> keys = {
@@ -1257,7 +1273,7 @@ uint64_t udp6ErrorStats(const std::string& str)
   return 0;
 }
 
-uint64_t tcpErrorStats(const std::string& str)
+uint64_t tcpErrorStats(const std::string& /* str */)
 {
 #ifdef __linux__
   ifstream ifs("/proc/net/netstat");
@@ -1282,7 +1298,7 @@ uint64_t tcpErrorStats(const std::string& str)
   return 0;
 }
 
-uint64_t getCPUIOWait(const std::string& str)
+uint64_t getCPUIOWait(const std::string& /* str */)
 {
 #ifdef __linux__
   ifstream ifs("/proc/stat");
@@ -1307,7 +1323,7 @@ uint64_t getCPUIOWait(const std::string& str)
   return 0;
 }
 
-uint64_t getCPUSteal(const std::string& str)
+uint64_t getCPUSteal(const std::string& /* str */)
 {
 #ifdef __linux__
   ifstream ifs("/proc/stat");
@@ -1371,30 +1387,29 @@ DNSName getTSIGAlgoName(TSIGHashEnum& algoEnum)
 uint64_t getOpenFileDescriptors(const std::string&)
 {
 #ifdef __linux__
-  DIR* dirhdl=opendir(("/proc/"+std::to_string(getpid())+"/fd/").c_str());
-  if(!dirhdl)
-    return 0;
-
-  struct dirent *entry;
-  int ret=0;
-  while((entry = readdir(dirhdl))) {
+  uint64_t nbFileDescriptors = 0;
+  const auto dirName = "/proc/" + std::to_string(getpid()) + "/fd/";
+  auto directoryError = pdns::visit_directory(dirName, [&nbFileDescriptors]([[maybe_unused]] ino_t inodeNumber, const std::string_view& name) {
     uint32_t num;
     try {
-      pdns::checked_stoi_into(num, entry->d_name);
+      pdns::checked_stoi_into(num, std::string(name));
+      if (std::to_string(num) == name) {
+        nbFileDescriptors++;
+      }
     } catch (...) {
-      continue; // was not a number.
+      // was not a number.
     }
-    if(std::to_string(num) == entry->d_name)
-      ret++;
+    return true;
+  });
+  if (directoryError) {
+    return 0U;
   }
-  closedir(dirhdl);
-  return ret;
-
+  return nbFileDescriptors;
 #elif defined(__OpenBSD__)
   // FreeBSD also has this in libopenbsd, but I don't know if that's available always
   return getdtablecount();
 #else
-  return 0;
+  return 0U;
 #endif
 }
 
@@ -1545,7 +1560,7 @@ bool isSettingThreadCPUAffinitySupported()
 #endif
 }
 
-int mapThreadToCPUList(pthread_t tid, const std::set<int>& cpus)
+int mapThreadToCPUList([[maybe_unused]] pthread_t tid, [[maybe_unused]] const std::set<int>& cpus)
 {
 #ifdef HAVE_PTHREAD_SETAFFINITY_NP
 #  ifdef __NetBSD__
@@ -1613,7 +1628,7 @@ std::vector<ComboAddress> getResolvers(const std::string& resolvConfPath)
   return results;
 }
 
-size_t getPipeBufferSize(int fd)
+size_t getPipeBufferSize([[maybe_unused]] int fd)
 {
 #ifdef F_GETPIPE_SZ
   int res = fcntl(fd, F_GETPIPE_SZ);
@@ -1627,7 +1642,7 @@ size_t getPipeBufferSize(int fd)
 #endif /* F_GETPIPE_SZ */
 }
 
-bool setPipeBufferSize(int fd, size_t size)
+bool setPipeBufferSize([[maybe_unused]] int fd, [[maybe_unused]] size_t size)
 {
 #ifdef F_SETPIPE_SZ
   if (size > static_cast<size_t>(std::numeric_limits<int>::max())) {
@@ -1734,4 +1749,58 @@ bool constantTimeStringEquals(const std::string& a, const std::string& b)
   return res == 0;
 #endif /* !HAVE_SODIUM_MEMCMP */
 #endif /* !HAVE_CRYPTO_MEMCMP */
+}
+
+namespace pdns
+{
+struct CloseDirDeleter
+{
+  void operator()(DIR* dir) const noexcept {
+    closedir(dir);
+  }
+};
+
+std::optional<std::string> visit_directory(const std::string& directory, const std::function<bool(ino_t inodeNumber, const std::string_view& name)>& visitor)
+{
+  auto dirHandle = std::unique_ptr<DIR, CloseDirDeleter>(opendir(directory.c_str()));
+  if (!dirHandle) {
+    auto err = errno;
+    return std::string("Error opening directory '" + directory + "': " + stringerror(err));
+  }
+
+  bool keepGoing = true;
+  struct dirent* ent = nullptr;
+  // NOLINTNEXTLINE(concurrency-mt-unsafe): readdir is thread-safe nowadays and readdir_r is deprecated
+  while (keepGoing && (ent = readdir(dirHandle.get())) != nullptr) {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay: dirent API
+    auto name = std::string_view(ent->d_name, strlen(ent->d_name));
+    keepGoing = visitor(ent->d_ino, name);
+  }
+
+  return std::nullopt;
+}
+
+UniqueFilePtr openFileForWriting(const std::string& filePath, mode_t permissions, bool mustNotExist, bool appendIfExists)
+{
+  int flags = O_WRONLY | O_CREAT;
+  if (mustNotExist) {
+    flags |= O_EXCL;
+  }
+  else if (appendIfExists) {
+    flags |= O_APPEND;
+  }
+  int fileDesc = open(filePath.c_str(), flags, permissions);
+  if (fileDesc == -1) {
+    return {};
+  }
+  auto filePtr = pdns::UniqueFilePtr(fdopen(fileDesc, appendIfExists ? "a" : "w"));
+  if (!filePtr) {
+    auto error = errno;
+    close(fileDesc);
+    errno = error;
+    return {};
+  }
+  return filePtr;
+}
+
 }

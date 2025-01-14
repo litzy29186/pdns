@@ -30,7 +30,7 @@ By default, our web server sends some security-related headers::
    X-XSS-Protection: 1; mode=block
    Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'
 
-You can override those headers, or add custom headers by using the last parameter to :func:`webserver`.
+You can override those headers, or add custom headers by using the last parameter to :func:`setWebserverConfig`.
 For example, to remove the X-Frame-Options header and add a X-Custom one:
 
 .. code-block:: lua
@@ -42,7 +42,7 @@ Credentials can be changed at run time using the :func:`setWebserverConfig` func
 dnsdist API
 -----------
 
-To access the API, the `apikey` must be set in the :func:`webserver` function.
+To access the API, the `apikey` must be set in the :func:`setWebserverConfig` function.
 Use the API, this key will need to be sent to dnsdist in the ``X-API-Key`` request header.
 An HTTP 401 response is returned when a wrong or no API key is received.
 A 404 response is generated is the requested endpoint does not exist.
@@ -447,8 +447,8 @@ URL Endpoints
       # TYPE dnsdist_frontend_tcpdiedsendingresponse counter
       # HELP dnsdist_frontend_tcpgaveup Amount of TCP connections terminated after too many attempts to get a connection to the backend
       # TYPE dnsdist_frontend_tcpgaveup counter
-      # HELP dnsdist_frontend_tcpclientimeouts Amount of TCP connections terminated by a timeout while reading from the client
-      # TYPE dnsdist_frontend_tcpclientimeouts counter
+      # HELP dnsdist_frontend_tcpclienttimeouts Amount of TCP connections terminated by a timeout while reading from the client
+      # TYPE dnsdist_frontend_tcpclienttimeouts counter
       # HELP dnsdist_frontend_tcpdownstreamtimeouts Amount of TCP connections terminated by a timeout while reading from the backend
       # TYPE dnsdist_frontend_tcpdownstreamtimeouts counter
       # HELP dnsdist_frontend_tcpcurrentconnections Amount of current incoming TCP connections from clients
@@ -477,7 +477,7 @@ URL Endpoints
       dnsdist_frontend_tcpdiedreadingquery{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
       dnsdist_frontend_tcpdiedsendingresponse{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
       dnsdist_frontend_tcpgaveup{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
-      dnsdist_frontend_tcpclientimeouts{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
+      dnsdist_frontend_tcpclienttimeouts{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
       dnsdist_frontend_tcpdownstreamtimeouts{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
       dnsdist_frontend_tcpcurrentconnections{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
       dnsdist_frontend_tcpmaxconcurrentconnections{frontend="127.0.0.1:853",proto="TCP (DNS over TLS)",thread="0"} 0
@@ -506,7 +506,7 @@ URL Endpoints
       dnsdist_frontend_tcpdiedreadingquery{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
       dnsdist_frontend_tcpdiedsendingresponse{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
       dnsdist_frontend_tcpgaveup{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
-      dnsdist_frontend_tcpclientimeouts{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
+      dnsdist_frontend_tcpclienttimeouts{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
       dnsdist_frontend_tcpdownstreamtimeouts{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
       dnsdist_frontend_tcpcurrentconnections{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
       dnsdist_frontend_tcpmaxconcurrentconnections{frontend="[::1]:443",proto="TCP (DNS over HTTPS)",thread="0"} 0
@@ -538,7 +538,7 @@ URL Endpoints
       dnsdist_frontend_tcpdiedreadingquery{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
       dnsdist_frontend_tcpdiedsendingresponse{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
       dnsdist_frontend_tcpgaveup{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
-      dnsdist_frontend_tcpclientimeouts{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
+      dnsdist_frontend_tcpclienttimeouts{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
       dnsdist_frontend_tcpdownstreamtimeouts{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
       dnsdist_frontend_tcpcurrentconnections{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
       dnsdist_frontend_tcpmaxconcurrentconnections{frontend="127.0.0.1:53",proto="TCP",thread="0"} 0
@@ -793,6 +793,16 @@ URL Endpoints
   :>json list: A list of metrics related to that pool
   :>json list servers: A list of :json:object:`Server` objects present in that pool
 
+.. http:get:: /api/v1/servers/localhost/rings?maxQueries=NUM&maxResponses=NUM
+
+  .. versionadded:: 1.9.0
+
+  Get the most recent queries and responses from the in-memory ring buffers. Returns up to ``maxQueries``
+  query entries if set, up to ``maxResponses`` responses if set, and the whole content of the ring buffers otherwise.
+
+  :>json list queries: The list of the most recent queries, as :json:object:`RingEntry` objects
+  :>json list responses: The list of the most recent responses, as :json:object:`RingEntry` objects
+
 JSON Objects
 ~~~~~~~~~~~~
 
@@ -828,7 +838,7 @@ JSON Objects
   :property integer error-responses: Number of HTTP responses sent with a non-200 code
   :property integer get-queries: Number of DoH queries received via the GET HTTP method
   :property integer http-connects: Number of DoH TCP connections established to this frontend
-  :property integer http1-queries: Number of DoH queries received over HTTP/1
+  :property integer http1-queries: Number of DoH queries received over HTTP/1 (or connection attempts with a HTTP/1.1 ALPN when the nghttp2 provider is used)
   :property integer http1-x00-responses: Number of DoH responses sent, over HTTP/1, per response code (200, 400, 403, 500, 502)
   :property integer http1-other-responses: Number of DoH responses sent, over HTTP/1, with another response code
   :property integer http2-queries: Number of DoH queries received over HTTP/2
@@ -955,6 +965,12 @@ JSON Objects
   :property integer tlsResumptions: The number of times a TLS session has been resumed
   :property integer weight: The weight assigned to this server
   :property float dropRate: The amount of packets dropped (timing out) per second by this server
+  :property integer healthCheckFailures: Number of health check attempts that failed (total)
+  :property integer healthCheckFailureParsing: Number of health check attempts that failed because the payload could not be parsed
+  :property integer healthCheckFailureTimeout: Number of health check attempts that failed because the response was not received in time
+  :property integer healthCheckFailureNetwork: Number of health check attempts that failed because of a network error
+  :property integer healthCheckFailureMismatch: Number of health check attempts that failed because the ID, qname, qtype or qclass did not match
+  :property integer healthCheckFailureInvalid: Number of health check attempts that failed because the DNS response was not valid
 
 .. json:object:: StatisticItem
 
@@ -963,3 +979,23 @@ JSON Objects
   :property string name: The name of this statistic. See :doc:`../statistics`
   :property string type: "StatisticItem"
   :property integer value: The value for this item
+
+.. json:object:: RingEntry
+
+  This represents an entry in the in-memory ring buffers.
+
+  :property float age: How long ago was the query or response received, in seconds
+  :property integer id: The DNS ID
+  :property string name: The requested domain name
+  :property string requestor: The client IP and port
+  :property integer size: The size of the query or response
+  :property integer qtype: The requested DNS type
+  :property string protocol: The DNS protocol the query or response was received over
+  :property boolean rd: The RD flag
+  :property string mac: The MAC address of the device sending the query
+  :property float latency: The time it took for the response to be sent back to the client, in microseconds
+  :property int rcode: The response code
+  :property boolean tc: The TC flag
+  :property boolean aa: The AA flag
+  :property integer answers: The number of records in the answer section of the response
+  :property string backend: The IP and port of the backend that returned the response, or "Cache" if it was a cache-hit

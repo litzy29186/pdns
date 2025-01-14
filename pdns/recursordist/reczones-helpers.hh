@@ -32,6 +32,9 @@
 #include "syncres.hh"
 #include "logger.hh"
 
+bool readHintsIntoCache(time_t now, const std::string& hintfile, std::vector<DNSRecord>& nsvec);
+void putDefaultHintsIntoCache(time_t now, std::vector<DNSRecord>& nsvec);
+
 void makeIPToNamesZone(const std::shared_ptr<SyncRes::domainmap_t>& newMap,
                        const vector<string>& parts,
                        Logr::log_t log);
@@ -42,6 +45,9 @@ bool parseEtcHostsLine(std::vector<std::string>& parts, std::string& line);
 void makePartialIPZone(SyncRes::domainmap_t& newMap,
                        std::initializer_list<const char*> labels,
                        Logr::log_t log);
+void makePartialIP6Zone(SyncRes::domainmap_t& newMap,
+                        const std::string& name,
+                        Logr::log_t log);
 
 void addForwardAndReverseLookupEntries(SyncRes::domainmap_t& newMap,
                                        const std::string& searchSuffix,

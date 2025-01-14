@@ -1,4 +1,5 @@
 import dns
+import dns.zone
 import json
 import os
 import requests
@@ -17,7 +18,7 @@ class RPZServer(object):
         self._targetSerial = 1
         self._serverPort = port
         listener = threading.Thread(name='RPZ Listener', target=self._listener, args=[])
-        listener.setDaemon(True)
+        listener.daemon = True
         listener.start()
 
     def getCurrentSerial(self):
@@ -185,7 +186,12 @@ class RPZServer(object):
                 break
 
             wire = answer.to_wire()
-            conn.send(struct.pack("!H", len(wire)))
+            lenprefix = struct.pack("!H", len(wire))
+
+            for b in lenprefix:
+                conn.send(bytes([b]))
+                time.sleep(0.5)
+
             conn.send(wire)
             self._currentSerial = serial
             break
@@ -208,7 +214,7 @@ class RPZServer(object):
                 thread = threading.Thread(name='RPZ Connection Handler',
                                       target=self._connectionHandler,
                                       args=[conn])
-                thread.setDaemon(True)
+                thread.daemon = True
                 thread.start()
 
             except socket.error as e:
@@ -248,7 +254,28 @@ api-key=%s
 log-rpz-changes=yes
 """ % (_confdir, _wsPort, _wsPassword, _apiKey)
 
-    def checkBlocked(self, name, shouldBeBlocked=True, adQuery=False, singleCheck=False):
+    def sendNotify(self):
+        notify = dns.message.make_query('zone.rpz', 'SOA', want_dnssec=False)
+        notify.set_opcode(4) # notify
+        res = self.sendUDPQuery(notify)
+        self.assertRcodeEqual(res, dns.rcode.NOERROR)
+        self.assertEqual(res.opcode(), 4)
+        self.assertEqual(res.question[0].to_text(), 'zone.rpz. IN SOA')
+
+    def assertAdditionalHasSOA(self, msg, name):
+        if not isinstance(msg, dns.message.Message):
+            raise TypeError("msg is not a dns.message.Message but a %s" % type(msg))
+
+        found = False
+        for rrset in msg.additional:
+            if rrset.rdtype == dns.rdatatype.SOA and str(rrset.name) == name:
+                found = True
+                break
+
+        if not found:
+            raise AssertionError("No %s SOA record found in the additional section:\n%s" % (name, msg.to_text()))
+
+    def checkBlocked(self, name, shouldBeBlocked=True, adQuery=False, singleCheck=False, soa=None):
         query = dns.message.make_query(name, 'A', want_dnssec=True)
         query.flags |= dns.flags.CD
         if adQuery:
@@ -264,13 +291,15 @@ log-rpz-changes=yes
                 expected = dns.rrset.from_text(name, 0, dns.rdataclass.IN, 'A', '192.0.2.42')
 
             self.assertRRsetInAnswer(res, expected)
+            if soa:
+                self.assertAdditionalHasSOA(res, soa)
             if singleCheck:
                 break
 
     def checkNotBlocked(self, name, adQuery=False, singleCheck=False):
         self.checkBlocked(name, False, adQuery, singleCheck)
 
-    def checkCustom(self, qname, qtype, expected):
+    def checkCustom(self, qname, qtype, expected, soa=None):
         query = dns.message.make_query(qname, qtype, want_dnssec=True)
         query.flags |= dns.flags.CD
         for method in ("sendUDPQuery", "sendTCPQuery"):
@@ -278,8 +307,10 @@ log-rpz-changes=yes
             res = sender(query)
             self.assertRcodeEqual(res, dns.rcode.NOERROR)
             self.assertRRsetInAnswer(res, expected)
+            if soa:
+                self.assertAdditionalHasSOA(res, soa)
 
-    def checkNoData(self, qname, qtype):
+    def checkNoData(self, qname, qtype, soa=None):
         query = dns.message.make_query(qname, qtype, want_dnssec=True)
         query.flags |= dns.flags.CD
         for method in ("sendUDPQuery", "sendTCPQuery"):
@@ -287,6 +318,8 @@ log-rpz-changes=yes
             res = sender(query)
             self.assertRcodeEqual(res, dns.rcode.NOERROR)
             self.assertEqual(len(res.answer), 0)
+            if soa:
+                self.assertAdditionalHasSOA(res, soa)
 
     def checkNXD(self, qname, qtype='A'):
         query = dns.message.make_query(qname, qtype, want_dnssec=True)
@@ -298,7 +331,7 @@ log-rpz-changes=yes
             self.assertEqual(len(res.answer), 0)
             self.assertEqual(len(res.authority), 1)
 
-    def checkTruncated(self, qname, qtype='A'):
+    def checkTruncated(self, qname, qtype='A', soa=None):
         query = dns.message.make_query(qname, qtype, want_dnssec=True)
         query.flags |= dns.flags.CD
         res = self.sendUDPQuery(query)
@@ -306,7 +339,8 @@ log-rpz-changes=yes
         self.assertMessageHasFlags(res, ['QR', 'RA', 'RD', 'CD', 'TC'])
         self.assertEqual(len(res.answer), 0)
         self.assertEqual(len(res.authority), 0)
-        self.assertEqual(len(res.additional), 0)
+        if soa:
+            self.assertAdditionalHasSOA(res, soa)
 
         res = self.sendTCPQuery(query)
         self.assertRcodeEqual(res, dns.rcode.NXDOMAIN)
@@ -350,11 +384,11 @@ class RPZXFRRecursorTest(RPZRecursorTest):
     """
 
     global rpzServerPort
+    _confdir = 'RPZXFRRecursor'
     _lua_config_file = """
     -- The first server is a bogus one, to test that we correctly fail over to the second one
-    rpzMaster({'127.0.0.1:9999', '127.0.0.1:%d'}, 'zone.rpz.', { refresh=1 })
-    """ % (rpzServerPort)
-    _confdir = 'RPZXFR'
+    rpzMaster({'127.0.0.1:9999', '127.0.0.1:%d'}, 'zone.rpz.', { refresh=1, includeSOA=true, dumpFile="configs/%s/rpz.zone.dump"})
+    """ % (rpzServerPort, _confdir)
     _wsPort = 8042
     _wsTimeout = 2
     _wsPassword = 'secretpassword'
@@ -366,6 +400,9 @@ webserver-port=%d
 webserver-address=127.0.0.1
 webserver-password=%s
 api-key=%s
+disable-packetcache
+allow-notify-from=127.0.0.0/8
+allow-notify-for=zone.rpz
 """ % (_confdir, _wsPort, _wsPassword, _apiKey)
     _xfrDone = 0
 
@@ -383,6 +420,23 @@ e 3600 IN A 192.0.2.42
 """.format(soa=cls._SOA))
         super(RPZRecursorTest, cls).generateRecursorConfig(confdir)
 
+    def checkDump(self, serial, timeout=2):
+        file = 'configs/%s/rpz.zone.dump' % self._confdir
+        attempts = 0
+        incr = .1
+        # There's a file base race here, so do a few attempts
+        while attempts < timeout:
+            zone = dns.zone.from_file(file, 'zone.rpz', relativize=False, check_origin=False, allow_include=False)
+            soa = zone['']
+            rdataset = soa.find_rdataset(dns.rdataclass.IN, dns.rdatatype.SOA)
+            # if the above call did not throw an exception the SOA has the right owner, continue
+            soa = zone.get_soa()
+            if soa.serial == serial and soa.mname == dns.name.from_text('ns.zone.rpz.'):
+                return # we found what we expected
+            attempts = attempts + incr
+            time.sleep(incr)
+        raise AssertionError("Waited %d seconds for the dumpfile to be updated to %d but the serial is still %d" % (timeout, serial, soa.serial))
+
     def waitUntilCorrectSerialIsLoaded(self, serial, timeout=5):
         global rpzServer
 
@@ -395,6 +449,7 @@ e 3600 IN A 192.0.2.42
                 raise AssertionError("Expected serial %d, got %d" % (serial, currentSerial))
             if currentSerial == serial:
                 self._xfrDone = self._xfrDone + 1
+                self.checkDump(serial)
                 return
 
             attempts = attempts + 1
@@ -403,73 +458,81 @@ e 3600 IN A 192.0.2.42
         raise AssertionError("Waited %d seconds for the serial to be updated to %d but the serial is still %d" % (timeout, serial, currentSerial))
 
     def testRPZ(self):
+        # Fresh RPZ does not need a notify
         self.waitForTCPSocket("127.0.0.1", self._wsPort)
         # first zone, only a should be blocked
         self.waitUntilCorrectSerialIsLoaded(1)
         self.checkRPZStats(1, 1, 1, self._xfrDone)
-        self.checkBlocked('a.example.')
+        self.checkBlocked('a.example.', soa='zone.rpz.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
 
         # second zone, a and b should be blocked
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(2)
         self.checkRPZStats(2, 2, 1, self._xfrDone)
-        self.checkBlocked('a.example.')
-        self.checkBlocked('b.example.')
+        self.checkBlocked('a.example.', soa='zone.rpz.')
+        self.checkBlocked('b.example.', soa='zone.rpz.')
         self.checkNotBlocked('c.example.')
 
         # third zone, only b should be blocked
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(3)
         self.checkRPZStats(3, 1, 1, self._xfrDone)
         self.checkNotBlocked('a.example.')
-        self.checkBlocked('b.example.')
+        self.checkBlocked('b.example.', soa='zone.rpz.')
         self.checkNotBlocked('c.example.')
 
         # fourth zone, only c should be blocked
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(4)
         self.checkRPZStats(4, 1, 1, self._xfrDone)
         self.checkNotBlocked('a.example.')
         self.checkNotBlocked('b.example.')
-        self.checkBlocked('c.example.')
+        self.checkBlocked('c.example.', soa='zone.rpz.')
 
         # fifth zone, we should get a full AXFR this time, and only d should be blocked
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(5)
         self.checkRPZStats(5, 3, 2, self._xfrDone)
         self.checkNotBlocked('a.example.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
-        self.checkBlocked('d.example.')
+        self.checkBlocked('d.example.', soa='zone.rpz.')
 
         # sixth zone, only e should be blocked, f is a local data record
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(6)
         self.checkRPZStats(6, 2, 2, self._xfrDone)
         self.checkNotBlocked('a.example.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
         self.checkNotBlocked('d.example.')
-        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.1', '192.0.2.2'))
+        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.1', '192.0.2.2'), soa='zone.rpz.')
         self.checkCustom('e.example.', 'MX', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'MX', '10 mx.example.'))
-        self.checkNoData('e.example.', 'AAAA')
-        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'))
+        self.checkNoData('e.example.', 'AAAA', soa='zone.rpz.')
+        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'), soa='zone.rpz.')
 
         # seventh zone, e should only have one A
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(7)
         self.checkRPZStats(7, 4, 2, self._xfrDone)
         self.checkNotBlocked('a.example.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
         self.checkNotBlocked('d.example.')
-        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.2'))
-        self.checkCustom('e.example.', 'MX', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'MX', '10 mx.example.'))
-        self.checkNoData('e.example.', 'AAAA')
-        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'))
+        self.checkCustom('e.example.', 'A', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.2'), soa='zone.rpz.')
+        self.checkCustom('e.example.', 'MX', dns.rrset.from_text('e.example.', 0, dns.rdataclass.IN, 'MX', '10 mx.example.'), soa='zone.rpz.')
+        self.checkNoData('e.example.', 'AAAA', soa='zone.rpz.')
+        self.checkCustom('f.example.', 'A', dns.rrset.from_text('f.example.', 0, dns.rdataclass.IN, 'CNAME', 'e.example.'), soa='zone.rpz.')
         # check that the policy is disabled for AD=1 queries
         self.checkNotBlocked('e.example.', True)
         # check non-custom policies
-        self.checkTruncated('tc.example.')
+        self.checkTruncated('tc.example.', soa='zone.rpz.')
         self.checkDropped('drop.example.')
 
         # eighth zone, all entries should be gone
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(8)
         self.checkRPZStats(8, 0, 3, self._xfrDone)
         self.checkNotBlocked('a.example.')
@@ -484,7 +547,9 @@ e 3600 IN A 192.0.2.42
         # 9th zone is a duplicate, it might get skipped
         global rpzServer
         rpzServer.moveToSerial(9)
+        self.sendNotify()
         time.sleep(3)
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(10)
         self.checkRPZStats(10, 1, 4, self._xfrDone)
         self.checkNotBlocked('a.example.')
@@ -492,13 +557,15 @@ e 3600 IN A 192.0.2.42
         self.checkNotBlocked('c.example.')
         self.checkNotBlocked('d.example.')
         self.checkNotBlocked('e.example.')
-        self.checkBlocked('f.example.')
+        self.checkBlocked('f.example.', soa='zone.rpz.')
         self.checkNXD('tc.example.')
         self.checkNXD('drop.example.')
 
         # the next update will update the zone twice
         rpzServer.moveToSerial(11)
+        self.sendNotify()
         time.sleep(3)
+        self.sendNotify()
         self.waitUntilCorrectSerialIsLoaded(12)
         self.checkRPZStats(12, 1, 4, self._xfrDone)
         self.checkNotBlocked('a.example.')
@@ -507,7 +574,7 @@ e 3600 IN A 192.0.2.42
         self.checkNotBlocked('d.example.')
         self.checkNotBlocked('e.example.')
         self.checkNXD('f.example.')
-        self.checkBlocked('g.example.')
+        self.checkBlocked('g.example.', soa='zone.rpz.')
         self.checkNXD('tc.example.')
         self.checkNXD('drop.example.')
 
@@ -516,9 +583,9 @@ class RPZFileRecursorTest(RPZRecursorTest):
     This test makes sure that we correctly load RPZ zones from a file
     """
 
-    _confdir = 'RPZFile'
+    _confdir = 'RPZFileRecursor'
     _lua_config_file = """
-    rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz." })
+    rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz.", includeSOA=true })
     """ % (_confdir)
     _config_template = """
 auth-zones=example=configs/%s/example.zone
@@ -554,7 +621,7 @@ tc.example.zone.rpz. 60 IN CNAME rpz-tcp-only.
     def testRPZ(self):
         self.checkCustom('a.example.', 'A', dns.rrset.from_text('a.example.', 0, dns.rdataclass.IN, 'A', '192.0.2.42', '192.0.2.43'))
         self.checkCustom('a.example.', 'TXT', dns.rrset.from_text('a.example.', 0, dns.rdataclass.IN, 'TXT', '"some text"'))
-        self.checkBlocked('z.example.')
+        self.checkBlocked('z.example.', soa='zone.rpz.')
         self.checkNotBlocked('b.example.')
         self.checkNotBlocked('c.example.')
         self.checkNotBlocked('d.example.')
@@ -562,7 +629,7 @@ tc.example.zone.rpz. 60 IN CNAME rpz-tcp-only.
         # check that the policy is disabled for AD=1 queries
         self.checkNotBlocked('z.example.', True)
         # check non-custom policies
-        self.checkTruncated('tc.example.')
+        self.checkTruncated('tc.example.', soa='zone.rpz.')
         self.checkDropped('drop.example.')
 
 class RPZFileDefaultPolRecursorTest(RPZRecursorTest):
@@ -570,7 +637,7 @@ class RPZFileDefaultPolRecursorTest(RPZRecursorTest):
     This test makes sure that we correctly load RPZ zones from a file with a default policy
     """
 
-    _confdir = 'RPZFileDefaultPolicy'
+    _confdir = 'RPZFileDefaultPolRecursor'
     _lua_config_file = """
     rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz.", defpol=Policy.NoAction })
     """ % (_confdir)
@@ -623,7 +690,7 @@ class RPZFileDefaultPolNotOverrideLocalRecursorTest(RPZRecursorTest):
     This test makes sure that we correctly load RPZ zones from a file with a default policy, not overriding local data entries
     """
 
-    _confdir = 'RPZFileDefaultPolicyNotOverrideLocal'
+    _confdir = 'RPZFileDefaultPolNotOverrideLocalRecursor'
     _lua_config_file = """
     rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz.", defpol=Policy.NoAction, defpolOverrideLocalData=false })
     """ % (_confdir)
@@ -678,7 +745,7 @@ class RPZSimpleAuthServer(object):
     def __init__(self, port):
         self._serverPort = port
         listener = threading.Thread(name='RPZ Simple Auth Listener', target=self._listener, args=[])
-        listener.setDaemon(True)
+        listener.daemon = True
         listener.start()
 
     def _getAnswer(self, message):
@@ -727,7 +794,7 @@ class RPZOrderingPrecedenceRecursorTest(RPZRecursorTest):
     This test makes sure that the recursor respects the RPZ ordering precedence rules
     """
 
-    _confdir = 'RPZOrderingPrecedence'
+    _confdir = 'RPZOrderingPrecedenceRecursor'
     _lua_config_file = """
     rpzFile('configs/%s/zone.rpz', { policyName="zone.rpz."})
     rpzFile('configs/%s/zone2.rpz', { policyName="zone2.rpz."})
@@ -992,7 +1059,7 @@ class RPZFileModByLuaRecursorTest(RPZRecursorTest):
     This test makes sure that we correctly load RPZ zones from a file while being modified by Lua callbacks
     """
 
-    _confdir = 'RPZFileModByLua'
+    _confdir = 'RPZFileModByLuaRecursor'
     _lua_dns_script_file = """
     function preresolve(dq)
       if dq.qname:equal('zmod.example.') then

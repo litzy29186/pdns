@@ -78,7 +78,7 @@ int Utility::timed_connect( Utility::sock_t sock,
 
 
 
-void Utility::setBindAny(int af, sock_t sock)
+void Utility::setBindAny([[maybe_unused]] int af, [[maybe_unused]] sock_t sock)
 {
   const int one = 1;
 
@@ -133,7 +133,7 @@ void Utility::usleep(unsigned long usec)
   ts.tv_sec = usec / 1000000;
   ts.tv_nsec = (usec % 1000000) * 1000;
   // POSIX.1 recommends using nanosleep instead of usleep
-  ::nanosleep(&ts, nullptr); 
+  ::nanosleep(&ts, nullptr);
 }
 
 
@@ -165,7 +165,7 @@ void Utility::dropGroupPrivs( uid_t uid, gid_t gid )
       if (initgroups(pw->pw_name, gid)<0) {
         int err = errno;
         SLOG(g_log<<Logger::Critical<<"Unable to set supplementary groups: "<<stringerror(err)<<endl,
-             g_slog->withName("runtime")->error(Logr::Critical, err, "Unable to drop supplementary groups"));
+             g_slog->withName("runtime")->error(Logr::Critical, err, "Unable to set supplementary groups"));
         exit(1);
       }
     }
@@ -180,12 +180,12 @@ void Utility::dropUserPrivs( uid_t uid )
     if(setuid(uid)<0) {
       int err = errno;
       SLOG(g_log<<Logger::Critical<<"Unable to set effective user id to "<<uid<<": "<<stringerror(err)<<endl,
-           g_slog->withName("runtime")->error(Logr::Error, err, "Unable to set effective user id", "uid", Logging::Loggable(uid)));
+           g_slog->withName("runtime")->error(Logr::Critical, err, "Unable to set effective user id", "uid", Logging::Loggable(uid)));
       exit(1);
     }
     else {
       SLOG(g_log<<Logger::Info<<"Set effective user id to "<<uid<<endl,
-           g_slog->withName("runtime")->info("Set effective user", "uid", Logging::Loggable(uid)));
+           g_slog->withName("runtime")->info(Logr::Info, "Set effective user", "uid", Logging::Loggable(uid)));
     }
   }
 }
@@ -199,17 +199,9 @@ Utility::pid_t Utility::getpid( )
 
 
 // Returns the current time.
-int Utility::gettimeofday( struct timeval *tv, void *tz )
+int Utility::gettimeofday( struct timeval *tv, void * /* tz */)
 {
-  return ::gettimeofday(tv,nullptr);
-}
-
-// Sets the random seed.
-void Utility::srandom()
-{
-  struct timeval tv;
-  gettimeofday(&tv, nullptr);
-  ::srandom(tv.tv_sec ^ tv.tv_usec ^ getpid());
+  return ::gettimeofday(tv, nullptr);
 }
 
 // Writes a vector.
@@ -225,7 +217,7 @@ static int isleap(int year) {
   return (!(year%4) && ((year%100) || !(year%400)));
 }
 
-time_t Utility::timegm(struct tm *const t) 
+time_t Utility::timegm(struct tm *const t)
 {
   const static short spm[13] = /* days per month -- nonleap! */
   { 0,
@@ -251,7 +243,7 @@ time_t Utility::timegm(struct tm *const t)
   if (t->tm_min>60) { t->tm_hour += t->tm_min/60; t->tm_min%=60; }
   if (t->tm_hour>60) { t->tm_mday += t->tm_hour/60; t->tm_hour%=60; }
   if (t->tm_mon>11) { t->tm_year += t->tm_mon/12; t->tm_mon%=12; }
- 
+
   while (t->tm_mday>spm[1+t->tm_mon]) {
     if (t->tm_mon==1 && isleap(t->tm_year+1900)) {
       if (t->tm_mon==31+29) break;
@@ -282,6 +274,7 @@ time_t Utility::timegm(struct tm *const t)
 
   /* day is now the number of days since 'Jan 1 1970' */
   i = 7;
+  // coverity[store_truncates_time_t]
   t->tm_wday = (day + 4) % i;                        /* Sunday=0, Monday=1, ..., Saturday=6 */
 
   i = 24;
@@ -289,4 +282,3 @@ time_t Utility::timegm(struct tm *const t)
   i = 60;
   return ((day + t->tm_hour) * i + t->tm_min) * i + t->tm_sec;
 }
-

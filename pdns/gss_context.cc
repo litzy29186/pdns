@@ -25,25 +25,25 @@
 
 #ifndef ENABLE_GSS_TSIG
 
-std::tuple<size_t, size_t, size_t> GssContext::getCounts() { return std::make_tuple<size_t, size_t, size_t>(0, 0, 0); }
+std::tuple<size_t, size_t, size_t> GssContext::getCounts() { return std::tuple<size_t, size_t, size_t>(0, 0, 0); }
 bool GssContext::supported() { return false; }
 GssContext::GssContext() :
   d_error(GSS_CONTEXT_UNSUPPORTED), d_type(GSS_CONTEXT_NONE) {}
-GssContext::GssContext(const DNSName& label) :
+GssContext::GssContext(const DNSName& /* label */) :
   d_error(GSS_CONTEXT_UNSUPPORTED), d_type(GSS_CONTEXT_NONE) {}
-void GssContext::setLocalPrincipal(const std::string& name) {}
-bool GssContext::getLocalPrincipal(std::string& name) { return false; }
-void GssContext::setPeerPrincipal(const std::string& name) {}
-bool GssContext::getPeerPrincipal(std::string& name) { return false; }
-void GssContext::generateLabel(const std::string& suffix) {}
-void GssContext::setLabel(const DNSName& label) {}
-bool GssContext::init(const std::string& input, std::string& output) { return false; }
-bool GssContext::accept(const std::string& input, std::string& output) { return false; }
+void GssContext::setLocalPrincipal(const std::string& /* name */) {}
+bool GssContext::getLocalPrincipal(std::string& /* name */) { return false; }
+void GssContext::setPeerPrincipal(const std::string& /* name */) {}
+bool GssContext::getPeerPrincipal(std::string& /* name */) { return false; }
+void GssContext::generateLabel(const std::string& /* suffix */) {}
+void GssContext::setLabel(const DNSName& /* label */) {}
+bool GssContext::init(const std::string& /* input */, std::string& /* output */) { return false; }
+bool GssContext::accept(const std::string& /* input */, std::string& /* output */) { return false; }
 bool GssContext::destroy() { return false; }
 bool GssContext::expired() { return false; }
 bool GssContext::valid() { return false; }
-bool GssContext::sign(const std::string& input, std::string& output) { return false; }
-bool GssContext::verify(const std::string& input, const std::string& signature) { return false; }
+bool GssContext::sign(const std::string& /* input */, std::string& /* output */) { return false; }
+bool GssContext::verify(const std::string& /* input */, const std::string& /* signature */) { return false; }
 GssContextError GssContext::getError() { return GSS_CONTEXT_UNSUPPORTED; }
 
 #else
@@ -143,7 +143,7 @@ public:
     if (!cred->valid()) {
       throw PDNSException("Invalid credential " + cred->d_nameS);
     }
-    d_cred = cred;
+    d_cred = std::move(cred);
   }
 
   ~GssSecContext()
@@ -161,7 +161,7 @@ public:
   GssContextType d_type{GSS_CONTEXT_NONE};
   gss_ctx_id_t d_ctx{GSS_C_NO_CONTEXT};
   gss_name_t d_peer_name{GSS_C_NO_NAME};
-  time_t d_expires{time(nullptr) + 60}; // partly initialized wil be cleaned up
+  time_t d_expires{time(nullptr) + 60}; // partly initialized will be cleaned up
 
   enum
   {
@@ -490,7 +490,7 @@ bool GssContext::getPeerPrincipal(std::string& name)
 
 std::tuple<size_t, size_t, size_t> GssContext::getCounts()
 {
-  return std::make_tuple(s_gss_init_creds.lock()->size(), s_gss_accept_creds.lock()->size(), s_gss_sec_context.lock()->size());
+  return {s_gss_init_creds.lock()->size(), s_gss_accept_creds.lock()->size(), s_gss_sec_context.lock()->size()};
 }
 
 void GssContext::processError(const std::string& method, OM_uint32 maj, OM_uint32 min)
@@ -556,7 +556,7 @@ bool gss_add_signature(const DNSName& context, const std::string& message, std::
     }
     return false;
   }
-  mac = tmp_mac;
+  mac = std::move(tmp_mac);
   return true;
 }
 

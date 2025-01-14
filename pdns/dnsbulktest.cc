@@ -22,9 +22,15 @@
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#if __clang_major__ >= 15
+#pragma GCC diagnostic ignored "-Wdeprecated-copy-with-user-provided-copy"
+#endif
 #include <boost/accumulators/accumulators.hpp>
 #include <boost/array.hpp>
 #include <boost/accumulators/statistics.hpp>
+#pragma GCC diagnostic pop
 #include <boost/program_options.hpp>
 #include "inflighter.cc"
 #include <deque>
@@ -56,7 +62,7 @@ bool g_envoutput=false;
 struct DNSResult
 {
   vector<ComboAddress> ips;
-  int rcode;
+  int rcode{0};
   bool seenauthsoa{false};
 };
 
@@ -69,113 +75,113 @@ struct TypedQuery
 
 struct SendReceive
 {
-  typedef int Identifier;
-  typedef DNSResult Answer; // ip 
-  int d_socket;
+  using Identifier = int;
+  using Answer = DNSResult; // ip
+  Socket d_socket;
   std::deque<uint16_t> d_idqueue;
-    
-  typedef accumulator_set<
+
+  using acc_t = accumulator_set<
         double
       , stats<boost::accumulators::tag::extended_p_square,
               boost::accumulators::tag::median(with_p_square_quantile),
               boost::accumulators::tag::mean(immediate)
               >
-    > acc_t;
+    >;
   unique_ptr<acc_t> d_acc;
-  
-  boost::array<double, 11> d_probs;
-  
-  SendReceive(const std::string& remoteAddr, uint16_t port) : d_probs({{0.001,0.01, 0.025, 0.1, 0.25,0.5,0.75,0.9,0.975, 0.99,0.9999}})
+
+  static constexpr std::array<double, 11> s_probs{{0.001,0.01, 0.025, 0.1, 0.25,0.5,0.75,0.9,0.975, 0.99,0.9999}};
+  unsigned int d_errors{0};
+  unsigned int d_nxdomains{0};
+  unsigned int d_nodatas{0};
+  unsigned int d_oks{0};
+  unsigned int d_unknowns{0};
+  unsigned int d_received{0};
+  unsigned int d_receiveerrors{0};
+  unsigned int d_senderrors{0};
+
+  SendReceive(const std::string& remoteAddr, uint16_t port) :
+    d_socket(AF_INET, SOCK_DGRAM),
+    d_acc(make_unique<acc_t>(acc_t(boost::accumulators::tag::extended_p_square::probabilities=s_probs)))
   {
-    d_acc = make_unique<acc_t>(acc_t(boost::accumulators::tag::extended_p_square::probabilities=d_probs));
-    // 
-    //d_acc = acc_t
-    d_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    int val=1;
-    setsockopt(d_socket, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
-    
+    d_socket.setReuseAddr();
     ComboAddress remote(remoteAddr, port);
-    connect(d_socket, (struct sockaddr*)&remote, remote.getSocklen());
-    d_oks = d_errors = d_nodatas = d_nxdomains = d_unknowns = 0;
-    d_received = d_receiveerrors = d_senderrors = 0;
-    for(unsigned int id =0 ; id < std::numeric_limits<uint16_t>::max(); ++id) 
+    d_socket.connect(remote);
+    for (unsigned int id =0 ; id < std::numeric_limits<uint16_t>::max(); ++id) {
       d_idqueue.push_back(id);
+    }
   }
-  
-  ~SendReceive()
-  {
-    close(d_socket);
-  }
-  
+
   Identifier send(TypedQuery& domain)
   {
     //cerr<<"Sending query for '"<<domain<<"'"<<endl;
-    
+
     // send it, copy code from 'sdig'
     vector<uint8_t> packet;
-  
+
     DNSPacketWriter pw(packet, domain.name, domain.type);
 
-    if(d_idqueue.empty()) {
+    if (d_idqueue.empty()) {
       cerr<<"Exhausted ids!"<<endl;
       exit(1);
-    }    
+    }
     pw.getHeader()->id = d_idqueue.front();
     d_idqueue.pop_front();
     pw.getHeader()->rd = 1;
     pw.getHeader()->qr = 0;
-    
-    if(::send(d_socket, &*packet.begin(), packet.size(), 0) < 0)
+
+    if (::send(d_socket.getHandle(), &*packet.begin(), packet.size(), 0) < 0) {
       d_senderrors++;
-    
-    if(!g_quiet)
+    }
+
+    if (!g_quiet) {
       cout<<"Sent out query for '"<<domain.name<<"' with id "<<pw.getHeader()->id<<endl;
+    }
     return pw.getHeader()->id;
   }
-  
-  bool receive(Identifier& id, DNSResult& dr)
+
+  bool receive(Identifier& iden, DNSResult& dnsResult)
   {
-    if(waitForData(d_socket, 0, 500000) > 0) {
-      char buf[512];
-          
-      int len = recv(d_socket, buf, sizeof(buf), 0);
-      if(len < 0) {
+    if (waitForData(d_socket.getHandle(), 0, 500000) > 0) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init): no need to initialize the buffer
+      std::array<char, 512> buf;
+
+      auto len = recv(d_socket.getHandle(), buf.data(), buf.size(), 0);
+      if (len < 0) {
         d_receiveerrors++;
-        return 0;
+        return false;
       }
-      else {
-        d_received++;
+      d_received++;
+      // parse packet, set 'id', fill out 'ip'
+
+      MOADNSParser mdp(false, string(buf.data(), static_cast<size_t>(len)));
+      if (!g_quiet) {
+        cout << "Reply to question for qname='" << mdp.d_qname << "', qtype=" << DNSRecordContent::NumberToType(mdp.d_qtype) << endl;
+        cout << "Rcode: " << mdp.d_header.rcode << ", RD: " << mdp.d_header.rd << ", QR: " << mdp.d_header.qr;
+        cout << ", TC: " << mdp.d_header.tc << ", AA: " << mdp.d_header.aa << ", opcode: " << mdp.d_header.opcode << endl;
       }
-      // parse packet, set 'id', fill out 'ip' 
-      
-      MOADNSParser mdp(false, string(buf, len));
-      if(!g_quiet) {
-        cout<<"Reply to question for qname='"<<mdp.d_qname<<"', qtype="<<DNSRecordContent::NumberToType(mdp.d_qtype)<<endl;
-        cout<<"Rcode: "<<mdp.d_header.rcode<<", RD: "<<mdp.d_header.rd<<", QR: "<<mdp.d_header.qr;
-        cout<<", TC: "<<mdp.d_header.tc<<", AA: "<<mdp.d_header.aa<<", opcode: "<<mdp.d_header.opcode<<endl;
-      }
-      dr.rcode = mdp.d_header.rcode;
-      for(MOADNSParser::answers_t::const_iterator i=mdp.d_answers.begin(); i!=mdp.d_answers.end(); ++i) {          
-        if(i->first.d_place == 1 && i->first.d_type == mdp.d_qtype)
-          dr.ips.push_back(ComboAddress(i->first.d_content->getZoneRepresentation()));
-        if(i->first.d_place == 2 && i->first.d_type == QType::SOA) {
-          dr.seenauthsoa = true;
+      dnsResult.rcode = mdp.d_header.rcode;
+      for (auto i = mdp.d_answers.begin(); i != mdp.d_answers.end(); ++i) {
+        if (i->d_place == 1 && i->d_type == mdp.d_qtype) {
+          dnsResult.ips.emplace_back(i->getContent()->getZoneRepresentation());
         }
-        if(!g_quiet)
-        {
-          cout<<i->first.d_place-1<<"\t"<<i->first.d_name<<"\tIN\t"<<DNSRecordContent::NumberToType(i->first.d_type);
-          cout<<"\t"<<i->first.d_ttl<<"\t"<< i->first.d_content->getZoneRepresentation()<<"\n";
+        if (i->d_place == 2 && i->d_type == QType::SOA) {
+          dnsResult.seenauthsoa = true;
+        }
+        if (!g_quiet) {
+          cout << i->d_place - 1 << "\t" << i->d_name << "\tIN\t" << DNSRecordContent::NumberToType(i->d_type);
+          cout << "\t" << i->d_ttl << "\t" << i->getContent()->getZoneRepresentation() << "\n";
         }
       }
-      
-      id = mdp.d_header.id;
-      d_idqueue.push_back(id);
-    
-      return 1;
+
+      iden = mdp.d_header.id;
+      d_idqueue.push_back(iden);
+
+      return true;
     }
-    return 0;
+
+    return false;
   }
-  
+
   void deliverTimeout(const Identifier& id)
   {
     if(!g_quiet) {
@@ -183,36 +189,38 @@ struct SendReceive
     }
     d_idqueue.push_back(id);
   }
-  
-  void deliverAnswer(TypedQuery& domain, const DNSResult& dr, unsigned int usec)
+
+  void deliverAnswer(TypedQuery& domain, const DNSResult& dnsResult, unsigned int usec)
   {
-    (*d_acc)(usec/1000.0);
-//    if(usec > 1000000)
-  //    cerr<<"Slow: "<<domain<<" ("<<usec/1000.0<<" msec)\n";
-    if(!g_quiet) {
-      cout<<domain.name<<"|"<<DNSRecordContent::NumberToType(domain.type)<<": ("<<usec/1000.0<<"msec) rcode: "<<dr.rcode;
-      for(const ComboAddress& ca :  dr.ips) {
-        cout<<", "<<ca.toString();
+    (*d_acc)(usec / 1000.0);
+    //  if(usec > 1000000)
+    //    cerr<<"Slow: "<<domain<<" ("<<usec/1000.0<<" ms)\n";
+    if (!g_quiet) {
+      cout << domain.name << "|" << DNSRecordContent::NumberToType(domain.type) << ": (" << usec / 1000.0 << " ms) rcode: " << dnsResult.rcode;
+      for (const ComboAddress& comboAddress : dnsResult.ips) {
+        cout << ", " << comboAddress.toString();
       }
-      cout<<endl;
+      cout << endl;
     }
-    if(dr.rcode == RCode::NXDomain) {
+    if (dnsResult.rcode == RCode::NXDomain) {
       d_nxdomains++;
     }
-    else if(dr.rcode) {
+    else if (dnsResult.rcode != 0) {
       d_errors++;
     }
-    else if(dr.ips.empty() && dr.seenauthsoa) 
+    else if (dnsResult.ips.empty() && dnsResult.seenauthsoa) {
       d_nodatas++;
-    else if(!dr.ips.empty())
+    }
+    else if (!dnsResult.ips.empty()) {
       d_oks++;
+    }
     else {
-      if(!g_quiet) cout<<"UNKNOWN!! ^^"<<endl;
+      if (!g_quiet) {
+        cout << "UNKNOWN!! ^^" << endl;
+      }
       d_unknowns++;
     }
   }
-  unsigned int d_errors, d_nxdomains, d_nodatas, d_oks, d_unknowns;
-  unsigned int d_received, d_receiveerrors, d_senderrors;
 };
 
 static void usage(po::options_description &desc) {
@@ -283,15 +291,15 @@ try
 
   SendReceive sr(g_vm["ip-address"].as<string>(), g_vm["portnumber"].as<uint16_t>());
   unsigned int limit = g_vm["limit"].as<unsigned int>();
-    
+
   vector<TypedQuery> domains;
-    
+
   Inflighter<vector<TypedQuery>, SendReceive> inflighter(domains, sr);
   inflighter.d_maxInFlight = 1000;
   inflighter.d_timeoutSeconds = 3;
   inflighter.d_burst = 100;
   string line;
-  
+
   pair<string, string> split;
   string::size_type pos;
   while(stringfgets(stdin, line)) {
@@ -309,8 +317,7 @@ try
     pos=split.second.find('/');
     if(pos != string::npos) // alexa has whole urls in the list now.
       split.second.resize(pos);
-    if(find_if(split.second.begin(), split.second.end(), isalpha) == split.second.end())
-    {
+    if (std::none_of(split.second.begin(), split.second.end(), isalpha)) {
       continue; // this was an IP address
     }
     domains.push_back(TypedQuery(split.second, qtype));
@@ -336,30 +343,30 @@ try
   cerr<< datafmt % "  Queued " % domains.size() % "  Received" % sr.d_received;
   cerr<< datafmt % "  Error -/-" % sr.d_senderrors %  "  Timeouts" % inflighter.getTimeouts();
   cerr<< datafmt % " " % "" %  "  Unexpected" % inflighter.getUnexpecteds();
-  
+
   cerr<< datafmt % " Sent" % (domains.size() - sr.d_senderrors) %  " Total" % (sr.d_received + inflighter.getTimeouts() + inflighter.getUnexpecteds());
-  
-  cerr<<endl;  
+
+  cerr<<endl;
   cerr<< datafmt % "DNS Status" % ""       % "" % "";
   cerr<< datafmt % "  OK" % sr.d_oks       % "" % "";
-  cerr<< datafmt % "  Error" % sr.d_errors       % "" % "";  
-  cerr<< datafmt % "  No Data" % sr.d_nodatas       % "" % "";  
+  cerr<< datafmt % "  Error" % sr.d_errors       % "" % "";
+  cerr<< datafmt % "  No Data" % sr.d_nodatas       % "" % "";
   cerr<< datafmt % "  NXDOMAIN" % sr.d_nxdomains      % "" % "";
-  cerr<< datafmt % "  Unknowns" % sr.d_unknowns      % "" % "";  
+  cerr<< datafmt % "  Unknowns" % sr.d_unknowns      % "" % "";
   cerr<< datafmt % "Answers" % (sr.d_oks      +      sr.d_errors      +      sr.d_nodatas      + sr.d_nxdomains           +      sr.d_unknowns) % "" % "";
   cerr<< datafmt % "  Timeouts " % (inflighter.getTimeouts()) % "" % "";
   cerr<< datafmt % "Total " % (sr.d_oks      +      sr.d_errors      +      sr.d_nodatas      + sr.d_nxdomains           +      sr.d_unknowns + inflighter.getTimeouts()) % "" % "";
-  
-  cerr<<"\n";
-  cerr<< "Mean response time: "<<mean(*sr.d_acc) << " msec"<<", median: "<<median(*sr.d_acc)<< " msec\n";
-  
-  boost::format statfmt("Time < %6.03f msec %|30t|%6.03f%% cumulative\n");
-  
-  for (unsigned int i = 0; i < sr.d_probs.size(); ++i) {
-        cerr << statfmt % extended_p_square(*sr.d_acc)[i] % (100*sr.d_probs[i]);
-    }
 
-  if(g_envoutput) {
+  cerr<<"\n";
+  cerr<< "Mean response time: "<<mean(*sr.d_acc) << " ms"<<", median: "<<median(*sr.d_acc)<< " ms\n";
+
+  boost::format statfmt("Time < %6.03f ms %|30t|%6.03f%% cumulative\n");
+
+  for (unsigned int i = 0; i < SendReceive::s_probs.size(); ++i) {
+    cerr << statfmt % extended_p_square(*sr.d_acc)[i] % (100*SendReceive::s_probs.at(i));
+  }
+
+  if (g_envoutput) {
     cout<<"DBT_QUEUED="<<domains.size()<<endl;
     cout<<"DBT_SENDERRORS="<<sr.d_senderrors<<endl;
     cout<<"DBT_RECEIVED="<<sr.d_received<<endl;
@@ -374,8 +381,12 @@ try
     cout<<"DBT_OKPERCENTAGEINT="<<(int)((float)sr.d_oks/domains.size()*100)<<endl;
   }
 }
-catch(PDNSException& pe)
+catch (const PDNSException& exp)
 {
-  cerr<<"Fatal error: "<<pe.reason<<endl;
-  exit(EXIT_FAILURE);
+  cerr<<"Fatal error: "<<exp.reason<<endl;
+  _exit(EXIT_FAILURE);
+}
+catch (const std::exception& exp) {
+  cerr<<"Fatal error: "<<exp.what()<<endl;
+  _exit(EXIT_FAILURE);
 }

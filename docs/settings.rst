@@ -61,6 +61,10 @@ Allow DNS updates from these IP ranges. Set to empty string to honour ``ALLOW-DN
 Allow AXFR NOTIFY from these IP ranges. Setting this to an empty string
 will drop all incoming notifies.
 
+.. note::
+  IPs allowed by this setting, still go through the normal NOTIFY processing as described in :ref:`secondary-operation`
+  The IP the NOTIFY is received from, still needs to be a nameserver for the secondary domain. Explicitly setting this parameter will not bypass those checks.
+
 .. _setting-allow-unsigned-autoprimary:
 
 ``allow-unsigned-autoprimary``
@@ -93,6 +97,7 @@ signed by valid TSIG signature for the zone.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-allow-unsigned-autoprimary`.
+  Removed in 4.9.0
 
 .. _setting-also-notify:
 
@@ -300,7 +305,7 @@ It is strongly recommended to keep this setting enabled (`yes`).
 
 -  Path
 
-Location of configuration directory (``pdns.conf``). Usually
+Location of configuration directory (the directory containing ``pdns.conf``). Usually
 ``/etc/powerdns``, but this depends on ``SYSCONFDIR`` during
 compile-time.
 
@@ -365,6 +370,18 @@ The value of :ref:`metadata-api-rectify` if it is not set on the zone.
 
 .. note::
   Pre 4.2.0 the default was always no.
+
+.. _setting-default-catalog-zone:
+
+``default-catalog-zone``
+------------------------
+
+- String:
+- Default: empty
+
+.. versionadded:: 4.8.3
+
+When a primary zone is created via the API, and the request does not specify a catalog zone, the name given here will be used.
 
 .. _setting-default-ksk-algorithms:
 .. _setting-default-ksk-algorithm:
@@ -535,6 +552,16 @@ to enable DNSSEC. Must be one of:
 The default keysize for the ZSK generated with :doc:`pdnsutil secure-zone <dnssec/pdnsutil>`.
 Only relevant for algorithms with non-fixed keysizes (like RSA).
 
+.. _setting-delay-notifications:
+
+``delay-notifications``
+-----------------------
+
+-  Integer
+-  Default: 0 (no delay, send them directly)
+
+Configure a delay to send out notifications, no delay by default.
+
 .. _setting-direct-dnskey:
 
 ``direct-dnskey``
@@ -575,7 +602,7 @@ regression testing.
 -  Boolean
 -  Default: no
 
-Do not log to syslog, only to stdout. Use this setting when running
+Do not log to syslog, only to stderr. Use this setting when running
 inside a supervisor that handles logging (like systemd).
 
 .. warning::
@@ -607,6 +634,20 @@ approximately doubles query load.
 If this is turned off, DNAME records are treated as any other and served
 only when queried explicitly.
 
+.. _setting-dnsproxy-udp-port-range:
+
+``dnsproxy-udp-port-range``
+---------------------------
+
+-  String
+-  Default: `10000 60000`
+
+If :ref:`setting-resolver` enables the DNS Proxy, this setting limits the
+port range the DNS Proxy's UDP port is chosen from.
+
+Default should be fine on most installs, but if you have conflicting local
+services, you may choose to limit the range.
+
 .. _setting-dnssec-key-cache-ttl:
 
 ``dnssec-key-cache-ttl``
@@ -627,6 +668,18 @@ caching.
 -  Default: no
 
 Enable/Disable DNS update (RFC2136) support. See :doc:`dnsupdate` for more.
+
+.. _setting-dnsupdate-require-tsig:
+
+``dnsupdate-require-tsig``
+--------------------------
+
+.. versionadded:: 5.0.0
+
+-  Boolean
+-  Default: no
+
+Requires DNS updates to be signed by a valid TSIG signature even if the zone has no associated keys.
 
 .. _setting-do-ipv6-additional-processing:
 
@@ -723,7 +776,7 @@ If this is enabled, ALIAS records are expanded (synthesized to their
 A/AAAA).
 
 If this is disabled (the default), ALIAS records will not be expanded and
-the server will will return NODATA for A/AAAA queries for such names.
+the server will return NODATA for A/AAAA queries for such names.
 
 .. note::
   :ref:`setting-resolver` must also be set for ALIAS expansion to work!
@@ -731,6 +784,23 @@ the server will will return NODATA for A/AAAA queries for such names.
 .. note::
   In PowerDNS Authoritative Server 4.0.x, this setting did not exist and
   ALIAS was always expanded.
+
+.. _setting-resolve-across-zones:
+
+``resolve-across-zones``
+------------------------
+
+.. versionadded:: 5.0.0
+
+-  Boolean
+-  Default: yes
+
+If this is enabled, CNAME records and other referrals will be resolved as long as their targets exist in any local backend.
+Can be disabled to allow for different authorities managing zones in the same server instance.
+
+Referrals not available in local backends are never resolved.
+SVCB referrals are never resolved across zones.
+ALIAS is not impacted by this setting.
 
 .. _setting-forward-dnsupdate:
 
@@ -935,7 +1005,7 @@ to at least 5 to see the logs.
 - Bool
 - Default: yes
 
-When printing log lines to stdout, prefix them with timestamps.
+When printing log lines to stderr, prefix them with timestamps.
 Disable this if the process supervisor timestamps these lines already.
 
 .. note::
@@ -962,6 +1032,18 @@ Corresponds to "syslog" level values (e.g. 0 = emergency, 1 = alert, 2 = critica
 Each level includes itself plus the lower levels before it.
 Not recommended to set this below 3.
 
+.. _setting-loglevel-show:
+
+``loglevel-show``
+-------------------
+
+-  Bool
+-  Default: no
+
+.. versionadded:: 4.9.0
+
+When enabled, log messages are formatted like structured logs, including their log level/priority: ``msg="Unable to launch, no backends configured for querying" prio="Error"``
+
 .. _setting-lua-axfr-script:
 
 ``lua-axfr-script``
@@ -971,6 +1053,44 @@ Not recommended to set this below 3.
 -  Default: empty
 
 Script to be used to edit incoming AXFRs, see :ref:`modes-of-operation-axfrfilter`
+
+.. _setting-lua-consistent-hashes-cleanup-interval:
+
+``lua-consistent-hashes-cleanup-interval``
+------------------------------------------
+
+-  Integer
+-  Default: 3600
+
+.. versionadded:: 4.9.0
+
+Amount of time (in seconds) between subsequent cleanup routines for pre-computed hashes related to :func:`pickchashed()`.
+
+.. _setting-lua-consistent-hashes-expire-delay:
+
+``lua-consistent-hashes-expire-delay``
+--------------------------------------
+
+-  Integer
+-  Default: 86400
+
+.. versionadded:: 4.9.0
+
+Amount of time (in seconds) a pre-computed hash entry will be considered as expired when unused. See :func:`pickchashed()`.
+
+.. _setting-lua-global-include-dir:
+
+``lua-global-include-dir``
+---------------------------
+
+-  String
+-  Default: empty
+-  Example: ``/etc/pdns/lua-global/``
+
+.. versionadded:: 5.0.0
+
+When creating a Lua context, scan this directory for additional lua files. All files that end with
+.lua are loaded in order using ``POSIX`` as locale with Lua scripts.
 
 .. _setting-lua-health-checks-expire-delay:
 
@@ -1012,13 +1132,25 @@ guaranteed to be stable, and is in fact likely to change.
 .. _setting-lua-records-exec-limit:
 
 ``lua-records-exec-limit``
------------------------------
+--------------------------
 
 -  Integer
 -  Default: 1000
 
 Limit LUA records scripts to ``lua-records-exec-limit`` instructions.
 Setting this to any value less than or equal to 0 will set no limit.
+
+.. _setting-lua-records-insert-whitespace:
+
+``lua-records-insert-whitespace``
+---------------------------------
+
+- Boolean
+- Default: no in 5.0, yes before that
+
+.. versionadded:: 4.9.1
+
+When combining the ``"`` delimited chunks of a LUA record, whether to insert whitespace between each chunk.
 
 .. _setting-master:
 
@@ -1027,7 +1159,8 @@ Setting this to any value less than or equal to 0 will set no limit.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-primary`.
- 
+  Removed in 4.9.0.
+
 -  Boolean
 -  Default: no
 
@@ -1113,7 +1246,8 @@ will generally suffice for most installations.
 -  Default: 5000
 
 If this many packets are waiting for database attention, consider the
-situation hopeless and respawn.
+situation hopeless and respawn the server process.
+This limit is per receiver thread.
 
 .. _setting-max-signature-cache-entries:
 
@@ -1278,8 +1412,11 @@ To notify all IP addresses apart from the 192.168.0.0/24 subnet use the followin
 ``outgoing-axfr-expand-alias``
 ------------------------------
 
--  Boolean
+-  One of ``no``, ``yes``, or ``ignore-errors``, String
 -  Default: no
+
+.. versionchanged:: 4.9.0
+  Option `ignore-errors` added.
 
 If this is enabled, ALIAS records are expanded (synthesized to their
 A/AAAA) during outgoing AXFR. This means slaves will not automatically
@@ -1288,6 +1425,12 @@ follow changes in those A/AAAA records unless you AXFR regularly!
 If this is disabled (the default), ALIAS records are sent verbatim
 during outgoing AXFR. Note that if your slaves do not support ALIAS,
 they will return NODATA for A/AAAA queries for such names.
+
+If the ALIAS target cannot be resolved during AXFR the AXFR will fail.
+To allow outgoing AXFR also if the ALIAS targets are broken set this
+setting to `ignore-errors`.
+Be warned, this will lead to inconsistent zones between Primary and
+Secondary name servers.
 
 .. _setting-overload-queue-length:
 
@@ -1298,7 +1441,8 @@ they will return NODATA for A/AAAA queries for such names.
 -  Default: 0 (disabled)
 
 If this many packets are waiting for database attention, answer any new
-questions strictly from the packet cache.
+questions strictly from the packet cache. Packets not in the cache will
+be dropped, and :ref:`stat-overload-drops` will be incremented.
 
 .. _setting-prevent-self-notification:
 
@@ -1432,6 +1576,8 @@ Number of receiver (listening) threads to start. See :doc:`performance`.
 -  Default: unset
 
 Recursive DNS server to use for ALIAS lookups and the internal stub resolver. Only one address can be given.
+
+It is assumed that the specified recursive DNS server, and the network path to it, are trusted.
 
 Examples::
 
@@ -1588,6 +1734,7 @@ signing speed by changing this number.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-secondary`.
+  Removed in 4.9.0.
 
 .. _setting-slave-cycle-interval:
 
@@ -1596,6 +1743,7 @@ signing speed by changing this number.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-xfr-cycle-interval`.
+  Removed in 4.9.0.
 
 .. _setting-slave-renotify:
 
@@ -1604,6 +1752,7 @@ signing speed by changing this number.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-secondary-do-renotify`.
+  Removed in 4.9.0.
 
 -  Boolean
 -  Default: no
@@ -1688,6 +1837,7 @@ and :doc:`Virtual Hosting <guides/virtual-instances>` how this can differ.
 
 .. deprecated:: 4.5.0
   Renamed to :ref:`setting-autosecondary`.
+  Removed in 4.9.0.
 
 -  Boolean
 -  Default: no
@@ -1825,11 +1975,11 @@ Enable for testing PowerDNS upgrades, without changing stored records.
 Enable for upgrading record content on secondaries, or when using the API (see :doc:`upgrade notes <../upgrading>`).
 Disable after record contents have been upgraded.
 
-This option is supported by the bind and Generic SQL backends. 
+This option is supported by the bind and Generic SQL backends.
 
 .. note::
   When using a generic SQL backend, records with an unknown record type (see :doc:`../appendices/types`) can be identified with the following SQL query::
-  
+
       SELECT * from records where type like 'TYPE%';
 
 .. _setting-version-string:
@@ -1897,6 +2047,7 @@ Note that this option only applies to credentials stored in the configuration as
 ----------------------
 
 -  String, one of "none", "normal", "detailed"
+-  Default: normal
 
 The amount of logging the webserver must do. "none" means no useful webserver information will be logged.
 When set to "normal", the webserver will log a line per request that should be familiar::
@@ -1922,14 +2073,14 @@ When set to "detailed", all information about the request and response are logge
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Length: 49
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Content-Type: text/html; charset=utf-8
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   Server: PowerDNS/0.0.15896.0.gaba8bab3ab
-  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Full body: 
+  [webserver] e235780e-a5cf-415e-9326-9d33383e739e  Full body:
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e   <!html><title>Not Found</title><h1>Not Found</h1>
   [webserver] e235780e-a5cf-415e-9326-9d33383e739e 127.0.0.1:55376 "GET /api/v1/servers/localhost/bla HTTP/1.1" 404 196
 
 The value between the hooks is a UUID that is generated for each request. This can be used to find all lines related to a single request.
 
 .. note::
-  The webserver logs these line on the NOTICE level. The :ref:`setting-loglevel` seting must be 5 or higher for these lines to end up in the log.
+  The webserver logs these line on the NOTICE level. The :ref:`setting-loglevel` setting must be 5 or higher for these lines to end up in the log.
 
 .. _setting-webserver-max-bodysize:
 
@@ -1940,6 +2091,17 @@ The value between the hooks is a UUID that is generated for each request. This c
 -  Default: 2
 
 Maximum request/response body size in megabytes.
+
+.. _setting-webserver-connection-timeout:
+
+``webserver-connection-timeout``
+--------------------------------
+.. versionadded:: 4.8.5
+
+-  Integer
+-  Default: 5
+
+Request/response timeout in seconds.
 
 .. _setting-webserver-password:
 
@@ -1981,6 +2143,20 @@ If the webserver should print arguments.
 -  Default: yes
 
 If a PID file should be written.
+
+.. _setting-workaround-11804:
+
+``workaround-11804``
+--------------------
+
+-  Boolean
+-  Default: no
+
+Workaround for `issue #11804 (outgoing AXFR may try to overfill a chunk and fail) <https://github.com/PowerDNS/pdns/issues/11804>`_.
+
+Default of no implies the pre-4.8 behaviour of up to 100 RRs per AXFR chunk.
+
+If enabled, only a single RR will be put into each AXFR chunk, making some zones transferable when they were not otherwise.
 
 .. _setting-xfr-cycle-interval:
 

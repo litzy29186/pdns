@@ -1,0 +1,585 @@
+Changelogs for 4.9.X
+====================
+
+.. changelog::
+  :version: 4.9.9
+  :released: 3rd of October 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14745
+
+    `Security advisory 2024-04 <https://docs.powerdns.com/recursor/security-advisories/powerdns-advisory-2024-04.html>`__: CVE-2024-25590
+
+.. changelog::
+  :version: 4.9.8
+  :released: 23rd of July 2024
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 14503
+    :tickets: 14499
+
+    Optimize processing of additionals.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14483
+    :tickets: 14471
+
+    Dump right SOA into dumpFile and report non-relative SOA for includeSOA=true.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14480
+    :tickets: 14404
+
+    Yahttp router: avoid unsigned underflow in route().
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 14413
+    :tickets: 14400
+
+    Switch el7 builds to Oracle Linux 7.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 14416
+    :tickets: 14359
+
+    dns.cc: use pdns::views::UnsignedCharView.
+
+.. changelog::
+  :version: 4.9.7
+  :released: 3rd of July 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14380
+    :tickets: 14373
+
+    Remove potential double SOA records if the target of a dns64 name is NODATA.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14352
+    :tickets: 14346
+
+    Fix TCP case for policy tags to not produce cached tags in protobuf messages.
+
+.. changelog::
+  :version: 4.9.6
+  :released: 14th of May 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14093
+    :tickets: 14049
+
+    Do not count RRSIGs using unsupported algorithms toward RRSIGs limit.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13995
+    :tickets: 13984
+
+    Correctly count NSEC3s considered when chasing the closest encloser.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13994
+    :tickets: 13926
+
+    Fix trace=fail regression and add regression test for it.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 13993
+
+    Only print Docker config if debug flag is set.
+
+.. changelog::
+  :version: 4.9.5
+  :released: 24th of April 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 14109
+
+    `Security advisory 2024-02 <https://docs.powerdns.com/recursor/security-advisories/powerdns-advisory-2024-02.html>`__: CVE-2024-25583
+
+.. changelog::
+  :version: 4.9.4
+  :released: 7th of March 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13853
+
+    Fix gathering of denial of existence proof for wildcard-expanded names.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13795
+    :tickets: 13788
+
+    Fix the zoneToCache regression introduced by SA 2024-01.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 13793
+    :tickets: 13387, 12897
+
+    Update new b-root-server.net addresses in built-in hints.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13792
+    :tickets: 13543
+
+    A single NSEC3 record covering everything is a special case.
+
+.. changelog::
+  :version: 4.9.3
+  :released: 13th of February 2024
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13783
+
+   `Security advisory 2024-01 <https://docs.powerdns.com/recursor/security-advisories/powerdns-advisory-2024-01.html>`__: CVE-2023-50387 and CVE-2023-50868
+
+.. changelog::
+  :version: 4.9.2
+  :released: 8th of November 2023
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13449
+    :tickets: 13383, 13409
+
+    Handle serve stale logic in getRootNXTrust().
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13411
+    :tickets: 13353
+
+    If serving stale, wipe CNAME records from cache when we get a NODATA negative response for them.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 13412
+    :tickets: 13408
+
+    Handle stack memory on NetBSD as on OpenBSD.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 13286
+    :tickets: 13092
+
+    Prevent two cases of copy of data that can be moved.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13284
+    :tickets: 13210
+
+    Remove Before=nss-lookup.target line from systemd unit file.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13283
+    :tickets: 13278
+
+    Prevent lookups for unsupported qtypes or rcode != 0 to submit refresh tasks.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 13282
+    :tickets: 13209
+
+    Implement a more fair way to prune the aggressive cache.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13176
+    :tickets: 13102
+
+    Do not assume the records are in a particular order when determining if an answer is NODATA.
+
+.. changelog::
+  :version: 4.9.1
+  :released: 25th of August 2023
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13163
+    :tickets: 13071
+
+    Fix code producing json.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13161
+    :tickets: 13106
+
+    Replace data in the aggressive cache if new data becomes available.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13160
+    :tickets: 13151
+
+    Fix a few typos in log messages.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13159
+    :tickets: 13105
+
+    (I)XFR: handle partial read of len prefix.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 13057
+    :tickets: 13021
+
+    Fix setting of policy tags on packet cache hits.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12995
+    :tickets: 12961
+
+    Work around Red Hat 8 misfeature OpenSSL's headers.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12994
+    :tickets: 12935
+
+    Stop using the now deprecated ERR_load_CRYPTO_strings() to detect OpenSSL.
+
+.. changelog::
+  :version: 4.9.0
+  :released: 30th of June 2023
+
+  Please review the :doc:`Upgrade Guide <../upgrade>` before upgrading from versions < 4.9.x.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12968
+    :tickets: 12963
+
+    Fix qname length getting out-of-sync with qname-minimization iteration count.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12936
+    :tickets: 12933
+
+    Rewrite and fix loop that checks if algorithms are available.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12932
+    :tickets: 12928
+
+    Fix daemonize() to properly background the process.
+
+.. changelog::
+  :version: 4.9.0-rc1
+  :released: 15nd of June 2023
+
+  Please review the :doc:`Upgrade Guide <../upgrade>` before upgrading from versions < 4.9.x.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12906
+    :tickets: 12468
+
+    Escape key names that are special in the systemd-journal structured logging backend.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12893
+    :tickets: 12890
+
+    Add feature to switch off unsupported DNSSEC algos, either automatically or manually.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12900
+
+    Prevent duplicate C/DNAMEs being included when doing serve-stale.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12896
+    :tickets: 12855
+
+    Expose NOD/UDR metrics.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12883
+    :tickets: 8232
+
+    Add SOA to RPZ modified answers if configured to do so.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12898
+
+    Keep track of max depth reached and report it if !quiet.
+  .. change::
+    :tags: Improvements
+    :pullreq: 12793,12904
+
+    Another set of fixes for clang-tidy reports.
+
+.. changelog::
+  :version: 4.9.0-beta1
+  :released: 2nd of June 2023
+
+  Please review the :doc:`Upgrade Guide <../upgrade>` before upgrading from versions < 4.9.x.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12861
+    :tickets: 12848
+
+    Introduce a way to completely disable root-refresh.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12673
+
+    Sanitize d_orig_ttl stored in record cache.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12838,12837,12836,12790
+
+    Delint some files to make clang-tidy not report any issue.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12829
+    :tickets: 12790
+
+    Fix clang-tidy botch with respect to spelling of "log-fail".
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12779,12862
+
+    Distinguish between recursion depth and CNAME chain length.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12750
+
+    Log if the answer was marked variable by SyncRes and if it was stored into the packet cache (if !quiet).
+
+.. changelog::
+  :version: 4.9.0-alpha1
+  :released: 14th of April 2023
+
+  Please review the :doc:`Upgrade Guide <../upgrade>` before upgrading from versions < 4.9.x.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12710
+
+    Cleanup rcode enums: base one is 8 bit unsigned, extended one 16 bit unsigned
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12594
+
+    Sharded and shared packet cache.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12709
+
+    More fine-grained capping of packet cache TTL.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12655
+    :tickets: 12486
+
+    Rework root priming code to allow multiple addresses per NS.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 10072,12716
+
+    Update Debian packaging for Recursor, including removal of sysv init script (Chris Hofstaedtler).
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12497
+
+    Unify shorthands for seconds in log messages (Josh Soref).
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12674
+
+    Validate: Stop passing shared pointers all the way down.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12688
+
+    Re-establish "recursion depth is always increasing" invariant.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12672
+
+    Fix a dnsheader unaligned case.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12550,12540,12524,12516,12515,12513,12502,12501,12462,12412,12401
+
+    OpenSSL 3.0 compatibility.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12554
+
+    Serve-stale-extensions works on 30s so an hour should be 120. (Andreas Jakum)
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12539
+
+    Fix doc typo (Matt Nordhoff).
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12493
+
+    Only store NSEC3 records in aggressive cache if we expect them to be effective.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 11777
+
+    rec_control trace-regex: trace to a file or stdout instead of the general log.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12495
+
+    Logging tweaks (Josh Soref).
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12434
+
+    Unify trace logging code in syncres and validator.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12446,12695
+
+    Stack protector for mthread stacks.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12425
+
+    Change the way RD=0 forwarded queries are handled.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12381
+
+    Enable FORTIFY_SOURCE=3 when supported by the compiler.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12419
+    :tickets: 12374
+
+    Negcache dump code: close fd on fdopen fail.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12396
+
+    Introduce a thread-safe version of stringerror().
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12399
+    :tickets: 11138
+
+    Name recursor threads consistently with a "rec/" prefix.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12392
+
+    Be more careful saving errno in makeClientSocket() and closesocket()
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12373
+
+    Rec: Warn on high (90%) mthread stack usage.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12334,12691,12698
+
+    Rec: Generate EDE in more cases, specifically on unreachable auths or synthesized results.
+
+  .. change::
+    :tags: Bug Fixes
+    :pullreq: 12368
+
+    Add the 'parse packet from auth' error message to structured logging.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12292
+
+    Wrap the CURL raw pointers in smart pointers.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12318
+    :tickets: 12241
+
+    Reorganization: move recursor specific files to recursordist.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12193,12348,12323
+
+    Introducing TCounters.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12120
+    :tickets: 12090
+
+    If we encounter a loop in QM, continue with the next iteration.
+
+  .. change::
+    :tags: Improvements
+    :pullreq: 12121
+    :tickets: 12080
+
+    More clear trace message for cache-only lookups.
+

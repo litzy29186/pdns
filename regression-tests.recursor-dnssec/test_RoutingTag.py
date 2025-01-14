@@ -22,10 +22,10 @@ daemon=no
 trace=yes
 dont-query=
 local-address=127.0.0.1
-packetcache-ttl=0
-packetcache-servfail-ttl=0
+packetcache-ttl=15
+packetcache-servfail-ttl=15
 max-cache-ttl=600
-threads=1
+threads=2
 loglevel=9
 disable-syslog=yes
 log-common-errors=yes
@@ -105,7 +105,7 @@ ecs-add-for=0.0.0.0/0
         cls.tearDownRecursor()
         os.unlink('tagfile')
 
-class testRoutingTag(RoutingTagTest):
+class RoutingTagTest(RoutingTagTest):
     _confdir = 'RoutingTag'
 
     _config_template = """
@@ -179,7 +179,7 @@ end
             print(e.output)
             raise
 
-class testRoutingTagFFI(RoutingTagTest):
+class RoutingTagFFITest(RoutingTagTest):
     _confdir = 'RoutingTagFFI'
 
     _config_template = """

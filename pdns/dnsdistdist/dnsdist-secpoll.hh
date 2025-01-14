@@ -26,8 +26,8 @@
 #ifndef DISABLE_SECPOLL
 #include <string>
 
-extern std::string g_secPollSuffix;
-extern time_t g_secPollInterval;
-
+namespace dnsdist::secpoll
+{
 void doSecPoll(const std::string& suffix);
+}
 #endif /* DISABLE_SECPOLL */

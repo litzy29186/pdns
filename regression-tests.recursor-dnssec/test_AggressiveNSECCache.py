@@ -16,6 +16,8 @@ class AggressiveNSECCacheBase(RecursorTest):
     _config_template = """
     dnssec=validate
     aggressive-nsec-cache-size=10000
+    aggressive-cache-max-nsec3-hash-cost=204
+    nsec3-max-iterations=150
     webserver=yes
     webserver-port=%d
     webserver-address=127.0.0.1
@@ -46,10 +48,31 @@ class AggressiveNSECCacheBase(RecursorTest):
 
         self.assertTrue(False)
 
+    def testNoEDE(self):
+        # This isn't an aggresive cache check, but the strcuture is very similar to the others,
+        # so letys place it here.
+        # It test the issue that an intermediate EDE does not get reported with the final answer
+        # https://github.com/PowerDNS/pdns/pull/12694
+        self.wipe()
+
+        res = self.sendQuery('host1.sub.secure.example.', 'TXT')
+        self.assertRcodeEqual(res, dns.rcode.NOERROR)
+        self.assertAnswerEmpty(res)
+        self.assertAuthorityHasSOA(res)
+        self.assertMessageIsAuthenticated(res)
+        self.assertEqual(res.edns, 0)
+        self.assertEqual(len(res.options), 0)
+
+        res = self.sendQuery('host1.sub.secure.example.', 'A')
+        self.assertRcodeEqual(res, dns.rcode.NOERROR)
+        self.assertMessageIsAuthenticated(res)
+        self.assertEqual(res.edns, 0)
+        self.assertEqual(len(res.options), 0)
+
     def testNoData(self):
         self.wipe()
 
-        # first we query a non-existent type, to get the NSEC in our cache
+        # first we query a nonexistent type, to get the NSEC in our cache
         entries = self.getMetric('aggressive-nsec-cache-entries')
         res = self.sendQuery('host1.secure.example.', 'TXT')
         self.assertRcodeEqual(res, dns.rcode.NOERROR)
@@ -72,9 +95,9 @@ class AggressiveNSECCacheBase(RecursorTest):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
-class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
+class AggressiveNSECCacheNSECTest(AggressiveNSECCacheBase):
     _confdir = 'AggressiveNSECCacheNSEC'
     __test__ = True
 
@@ -83,7 +106,7 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
     def testNXD(self):
         self.wipe()
 
-        # first we query a non-existent name, to get the needed NSECs (name + widcard) in our cache
+        # first we query a nonexistent name, to get the needed NSECs (name + widcard) in our cache
         entries = self.getMetric('aggressive-nsec-cache-entries')
         hits = self.getMetric('aggressive-nsec-cache-nsec-hits')
         res = self.sendQuery('host2.secure.example.', 'TXT')
@@ -110,12 +133,12 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
     def testWildcard(self):
         self.wipe()
 
-        # first we query a non-existent name, but for which a wildcard matches,
+        # first we query a nonexistent name, but for which a wildcard matches,
         # to get the NSEC in our cache
         res = self.sendQuery('test1.wildcard.secure.example.', 'A')
         expected = dns.rrset.from_text('test1.wildcard.secure.example.', 0, dns.rdataclass.IN, 'A', '{prefix}.10'.format(prefix=self._PREFIX))
@@ -137,7 +160,7 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
         # now we ask for a type that does not exist at the wildcard
         hits = self.getMetric('aggressive-nsec-cache-nsec-hits')
@@ -152,7 +175,7 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
         # we can also ask a different type, for a different name that is covered
         # by the NSEC and matches the wildcard (but the type does not exist)
@@ -168,7 +191,7 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
     def test_Bogus(self):
         self.wipe()
@@ -212,7 +235,7 @@ class AggressiveNSECCacheNSEC(AggressiveNSECCacheBase):
         self.assertEqual(res.options[0].otype, 15)
         self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(9, b''))
 
-class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
+class AggressiveNSECCacheNSEC3Test(AggressiveNSECCacheBase):
     _confdir = 'AggressiveNSECCacheNSEC3'
     __test__ = True
 
@@ -263,7 +286,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
     def testNXD(self):
         self.wipe()
 
-        # first we query a non-existent name, to get the needed NSEC3s in our cache
+        # first we query a nonexistent name, to get the needed NSEC3s in our cache
         res = self.sendQuery('host2.secure.example.', 'TXT')
         self.assertRcodeEqual(res, dns.rcode.NXDOMAIN)
         self.assertAnswerEmpty(res)
@@ -282,7 +305,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
     def testWildcard(self):
         self.wipe()
@@ -295,7 +318,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
         self.assertAuthorityHasSOA(res)
         self.assertMessageIsAuthenticated(res)
 
-        # we query a non-existent name, but for which a wildcard matches,
+        # we query a nonexistent name, but for which a wildcard matches,
         # to get the NSEC3 in our cache
         res = self.sendQuery('test5.wildcard.secure.example.', 'A')
         expected = dns.rrset.from_text('test5.wildcard.secure.example.', 0, dns.rdataclass.IN, 'A', '{prefix}.10'.format(prefix=self._PREFIX))
@@ -315,7 +338,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
         # now we ask for a type that does not exist at the wildcard
         nbQueries = self.getMetric('all-outqueries')
@@ -328,7 +351,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
         # we can also ask a different type, for a different name that is covered
         # by the NSEC3s and matches the wildcard (but the type does not exist)
@@ -342,7 +365,7 @@ class AggressiveNSECCacheNSEC3(AggressiveNSECCacheBase):
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized from aggressive NSEC cache (RFC8198)'))
 
     def test_OptOut(self):
         self.wipe()

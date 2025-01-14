@@ -5,17 +5,11 @@
 #include <thread>
 #include <unistd.h>
 
-#ifdef HAVE_NET_SNMP
-#include <net-snmp/net-snmp-config.h>
-#include <net-snmp/definitions.h>
-#include <net-snmp/types.h>
-#include <net-snmp/utilities.h>
-#include <net-snmp/config_api.h>
-#include <net-snmp/agent/net-snmp-agent-includes.h>
-#undef INET6 /* SRSLY? */
-#endif /* HAVE_NET_SNMP */
-
 #include "mplexer.hh"
+#include "channel.hh"
+
+typedef struct netsnmp_request_info_s netsnmp_request_info;
+typedef struct variable_list netsnmp_variable_list;
 
 class SNMPAgent
 {
@@ -23,11 +17,6 @@ public:
   SNMPAgent(const std::string& name, const std::string& daemonSocket);
   virtual ~SNMPAgent()
   {
-#ifdef HAVE_NET_SNMP
-    
-    close(d_trapPipe[0]);
-    close(d_trapPipe[1]);
-#endif /* HAVE_NET_SNMP */
   }
 
   void run()
@@ -44,14 +33,13 @@ public:
 #endif /* HAVE_NET_SNMP */
 protected:
 #ifdef HAVE_NET_SNMP
-  /* OID for snmpTrapOID.0 */
-  static const oid snmpTrapOID[];
-  static const size_t snmpTrapOIDLen;
+  static void addSNMPTrapOID(netsnmp_variable_list** varList, const void* value, size_t len);
 
-  static bool sendTrap(int fd,
+  static bool sendTrap(pdns::channel::Sender<netsnmp_variable_list, void(*)(netsnmp_variable_list*)>& sender,
                        netsnmp_variable_list* varList);
 
-  int d_trapPipe[2] = { -1, -1};
+  pdns::channel::Sender<netsnmp_variable_list, void(*)(netsnmp_variable_list*)> d_sender;
+  pdns::channel::Receiver<netsnmp_variable_list, void(*)(netsnmp_variable_list*)> d_receiver;
 #endif /* HAVE_NET_SNMP */
 private:
   void worker();

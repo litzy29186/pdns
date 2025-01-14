@@ -7,7 +7,7 @@ import subprocess
 
 from recursortests import RecursorTest
 
-class NotifyRecursorTest(RecursorTest):
+class NotifyTest(RecursorTest):
 
     _auth_zones = {
         '8': {'threads': 1,
@@ -20,18 +20,25 @@ class NotifyRecursorTest(RecursorTest):
     _wsPassword = 'secretpassword'
     _apiKey = 'secretapikey'
     _config_template = """
-    disable-packetcache=yes
-    auth-zones=example=configs/%s/example.zone
-    allow-notify-from=127.0.0.1
-    allow-notify-for=example
-    quiet=no
-    loglevel=9
-    webserver=yes
-    webserver-port=%d
-    webserver-address=127.0.0.1
-    webserver-password=%s
-    api-key=%s
-    """ % (_confdir, _wsPort, _wsPassword, _apiKey)
+packetcache:
+    disable: true
+recursor:
+    auth_zones:
+    - zone: example
+      file: configs/%s/example.zone
+incoming:
+    allow_notify_from: [127.0.0.1]
+    allow_notify_for: ['example']
+logging:
+    quiet: false
+    loglevel: 9
+webservice:
+    webserver: true
+    port: %d
+    address: 127.0.0.1
+    password: %s
+    api_key: %s
+""" % (_confdir, _wsPort, _wsPassword, _apiKey)
 
     @classmethod
     def generateRecursorConfig(cls, confdir):
@@ -46,7 +53,7 @@ d 3600 IN A 192.0.2.42
 e 3600 IN A 192.0.2.42
 f 3600 IN CNAME f            ; CNAME loop: dirty trick to get a ServFail in an authzone
 """.format(soa=cls._SOA))
-        super(NotifyRecursorTest, cls).generateRecursorConfig(confdir)
+        super(NotifyTest, cls).generateRecursorYamlConfig(confdir)
 
     def checkRecordCacheMetrics(self, expectedHits, expectedMisses):
         headers = {'x-api-key': self._apiKey}
@@ -70,6 +77,7 @@ f 3600 IN CNAME f            ; CNAME loop: dirty trick to get a ServFail in an a
         self.assertTrue(foundMisses)
 
     def testNotify(self):
+        self.waitForTCPSocket("127.0.0.1", self._wsPort)
         # first query
         qname = 'a.example.'
         query = dns.message.make_query(qname, 'A', want_dnssec=True)
@@ -102,9 +110,9 @@ f 3600 IN CNAME f            ; CNAME loop: dirty trick to get a ServFail in an a
             sender = getattr(self, method)
             res = sender(notify)
             self.assertRcodeEqual(res, dns.rcode.NOERROR)
-            self.assertEquals(res.opcode(), 4)
+            self.assertEqual(res.opcode(), 4)
             print(res)
-            self.assertEquals(res.question[0].to_text(), 'example. IN SOA')
+            self.assertEqual(res.question[0].to_text(), 'example. IN SOA')
 
         self.checkRecordCacheMetrics(3, 1)
 

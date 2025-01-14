@@ -38,13 +38,13 @@
 #include "json11.hpp"
 #include "webserver.hh"
 #include "ws-api.hh"
-#include "logger.hh"
 #include "logging.hh"
 #include "rec-lua-conf.hh"
 #include "rpzloader.hh"
 #include "uuid-utils.hh"
 #include "tcpiohandler.hh"
 #include "rec-main.hh"
+#include "settings/cxxsettings.hh" // IWYU pragma: keep, needed by included generated file
 
 using json11::Json;
 
@@ -69,8 +69,14 @@ static void apiWriteConfigFile(const string& filebasename, const string& content
     throw ApiException("Config Option \"api-config-dir\" must be set");
   }
 
-  string filename = ::arg()["api-config-dir"] + "/" + filebasename + ".conf";
-  ofstream ofconf(filename.c_str());
+  string filename = ::arg()["api-config-dir"] + "/" + filebasename;
+  if (g_yamlSettings) {
+    filename += ".yml";
+  }
+  else {
+    filename += ".conf";
+  }
+  ofstream ofconf(filename);
   if (!ofconf) {
     throw ApiException("Could not open config fragment file '" + filename + "' for writing: " + stringerror());
   }
@@ -79,16 +85,55 @@ static void apiWriteConfigFile(const string& filebasename, const string& content
   ofconf.close();
 }
 
-static void apiServerConfigACL(const std::string& aclType, HttpRequest* req, HttpResponse* resp)
+static void apiServerConfigACLGET(const std::string& aclType, HttpRequest* /* req */, HttpResponse* resp)
 {
-  if (req->method == "PUT") {
-    Json document = req->json();
+  // Return currently configured ACLs
+  vector<string> entries;
+  if (t_allowFrom && aclType == "allow-from") {
+    entries = t_allowFrom->toStringVector();
+  }
+  else if (t_allowNotifyFrom && aclType == "allow-notify-from") {
+    entries = t_allowNotifyFrom->toStringVector();
+  }
 
-    auto jlist = document["value"];
-    if (!jlist.is_array()) {
-      throw ApiException("'value' must be an array");
+  resp->setJsonBody(Json::object{
+    {"name", aclType},
+    {"value", entries},
+  });
+}
+
+static void apiServerConfigACLPUT(const std::string& aclType, HttpRequest* req, HttpResponse* resp)
+{
+  const auto& document = req->json();
+
+  const auto& jlist = document["value"];
+
+  if (!jlist.is_array()) {
+    throw ApiException("'value' must be an array");
+  }
+
+  if (g_yamlSettings) {
+    ::rust::Vec<::rust::String> vec;
+    for (const auto& value : jlist.array_items()) {
+      vec.emplace_back(value.string_value());
     }
 
+    try {
+      ::pdns::rust::settings::rec::validate_allow_from(aclType, vec);
+    }
+    catch (const ::rust::Error& e) {
+      throw ApiException(string("Unable to convert: ") + e.what());
+    }
+    ::rust::String yaml;
+    if (aclType == "allow-from") {
+      yaml = pdns::rust::settings::rec::allow_from_to_yaml_string_incoming("allow_from", "allow_from_file", vec);
+    }
+    else {
+      yaml = pdns::rust::settings::rec::allow_from_to_yaml_string_incoming("allow_notify_from", "allow_notify_from_file", vec);
+    }
+    apiWriteConfigFile(aclType, string(yaml));
+  }
+  else {
     NetmaskGroup nmg;
     for (const auto& value : jlist.array_items()) {
       try {
@@ -99,70 +144,64 @@ static void apiServerConfigACL(const std::string& aclType, HttpRequest* req, Htt
       }
     }
 
-    ostringstream ss;
+    ostringstream strStream;
 
     // Clear <foo>-from-file if set, so our changes take effect
-    ss << aclType << "-file=" << endl;
+    strStream << aclType << "-file=" << endl;
 
     // Clear ACL setting, and provide a "parent" value
-    ss << aclType << "=" << endl;
-    ss << aclType << "+=" << nmg.toString() << endl;
+    strStream << aclType << "=" << endl;
+    strStream << aclType << "+=" << nmg.toString() << endl;
 
-    apiWriteConfigFile(aclType, ss.str());
-
-    parseACLs();
-
-    // fall through to GET
-  }
-  else if (req->method != "GET") {
-    throw HttpMethodNotAllowedException();
+    apiWriteConfigFile(aclType, strStream.str());
   }
 
-  // Return currently configured ACLs
-  vector<string> entries;
-  if (t_allowFrom && aclType == "allow-from") {
-    t_allowFrom->toStringVector(&entries);
-  }
-  else if (t_allowNotifyFrom && aclType == "allow-notify-from") {
-    t_allowNotifyFrom->toStringVector(&entries);
-  }
+  parseACLs();
 
-  resp->setJsonBody(Json::object{
-    {"name", aclType},
-    {"value", entries},
-  });
+  apiServerConfigACLGET(aclType, req, resp);
 }
 
-static void apiServerConfigAllowFrom(HttpRequest* req, HttpResponse* resp)
+static void apiServerConfigAllowFromGET(HttpRequest* req, HttpResponse* resp)
 {
-  apiServerConfigACL("allow-from", req, resp);
+  apiServerConfigACLGET("allow-from", req, resp);
 }
 
-static void apiServerConfigAllowNotifyFrom(HttpRequest* req, HttpResponse* resp)
+static void apiServerConfigAllowNotifyFromGET(HttpRequest* req, HttpResponse* resp)
 {
-  apiServerConfigACL("allow-notify-from", req, resp);
+  apiServerConfigACLGET("allow-notify-from", req, resp);
+}
+
+static void apiServerConfigAllowFromPUT(HttpRequest* req, HttpResponse* resp)
+{
+  apiServerConfigACLPUT("allow-from", req, resp);
+}
+
+static void apiServerConfigAllowNotifyFromPUT(HttpRequest* req, HttpResponse* resp)
+{
+  apiServerConfigACLPUT("allow-notify-from", req, resp);
 }
 
 static void fillZone(const DNSName& zonename, HttpResponse* resp)
 {
   auto iter = SyncRes::t_sstorage.domainmap->find(zonename);
-  if (iter == SyncRes::t_sstorage.domainmap->end())
+  if (iter == SyncRes::t_sstorage.domainmap->end()) {
     throw ApiException("Could not find domain '" + zonename.toLogString() + "'");
+  }
 
   const SyncRes::AuthDomain& zone = iter->second;
 
   Json::array servers;
   for (const ComboAddress& server : zone.d_servers) {
-    servers.push_back(server.toStringWithPort());
+    servers.emplace_back(server.toStringWithPort());
   }
 
   Json::array records;
-  for (const SyncRes::AuthDomain::records_t::value_type& dr : zone.d_records) {
+  for (const SyncRes::AuthDomain::records_t::value_type& record : zone.d_records) {
     records.push_back(Json::object{
-      {"name", dr.d_name.toString()},
-      {"type", DNSRecordContent::NumberToType(dr.d_type)},
-      {"ttl", (double)dr.d_ttl},
-      {"content", dr.d_content->getZoneRepresentation()}});
+      {"name", record.d_name.toString()},
+      {"type", DNSRecordContent::NumberToType(record.d_type)},
+      {"ttl", (double)record.d_ttl},
+      {"content", record.getContent()->getZoneRepresentation()}});
   }
 
   // id is the canonical lookup key, which doesn't actually match the name (in some cases)
@@ -174,12 +213,13 @@ static void fillZone(const DNSName& zonename, HttpResponse* resp)
     {"kind", zone.d_servers.empty() ? "Native" : "Forwarded"},
     {"servers", servers},
     {"recursion_desired", zone.d_servers.empty() ? false : zone.d_rdForward},
+    {"notify_allowed", isAllowNotifyForZone(zonename)},
     {"records", records}};
 
   resp->setJsonBody(doc);
 }
 
-static void doCreateZone(const Json document)
+static void doCreateZone(const Json& document)
 {
   if (::arg()["api-config-dir"].empty()) {
     throw ApiException("Config Option \"api-config-dir\" must be set");
@@ -191,17 +231,22 @@ static void doCreateZone(const Json document)
 
   string singleIPTarget = document["single_target_ip"].string_value();
   string kind = toUpper(stringFromJson(document, "kind"));
-  bool rd = boolFromJson(document, "recursion_desired");
+  bool rdFlag = boolFromJson(document, "recursion_desired");
+  bool notifyAllowed = boolFromJson(document, "notify_allowed", false);
   string confbasename = "zone-" + apiZoneNameToId(zone);
 
+  const string yamlAPIZonesFile = ::arg()["api-config-dir"] + "/apizones";
+
   if (kind == "NATIVE") {
-    if (rd)
+    if (rdFlag) {
       throw ApiException("kind=Native and recursion_desired are mutually exclusive");
+    }
     if (!singleIPTarget.empty()) {
       try {
         ComboAddress rem(singleIPTarget);
-        if (rem.sin4.sin_family != AF_INET)
+        if (rem.sin4.sin_family != AF_INET) {
           throw ApiException("");
+        }
         singleIPTarget = rem.toString();
       }
       catch (...) {
@@ -221,34 +266,56 @@ static void doCreateZone(const Json document)
     }
     ofzone.close();
 
-    apiWriteConfigFile(confbasename, "auth-zones+=" + zonename + "=" + zonefilename);
-  }
-  else if (kind == "FORWARDED") {
-    string serverlist;
-    for (const auto& value : document["servers"].array_items()) {
-      string server = value.string_value();
-      if (server == "") {
-        throw ApiException("Forwarded-to server must not be an empty string");
-      }
-      try {
-        ComboAddress ca = parseIPAndPort(server, 53);
-        if (!serverlist.empty()) {
-          serverlist += ";";
-        }
-        serverlist += ca.toStringWithPort();
-      }
-      catch (const PDNSException& e) {
-        throw ApiException(e.reason);
-      }
-    }
-    if (serverlist == "")
-      throw ApiException("Need at least one upstream server when forwarding");
-
-    if (rd) {
-      apiWriteConfigFile(confbasename, "forward-zones-recurse+=" + zonename + "=" + serverlist);
+    if (g_yamlSettings) {
+      pdns::rust::settings::rec::AuthZone authzone;
+      authzone.zone = zonename;
+      authzone.file = zonefilename;
+      pdns::rust::settings::rec::api_add_auth_zone(yamlAPIZonesFile, std::move(authzone));
     }
     else {
-      apiWriteConfigFile(confbasename, "forward-zones+=" + zonename + "=" + serverlist);
+      apiWriteConfigFile(confbasename, "auth-zones+=" + zonename + "=" + zonefilename);
+    }
+  }
+  else if (kind == "FORWARDED") {
+    if (g_yamlSettings) {
+      pdns::rust::settings::rec::ForwardZone forward;
+      forward.zone = zonename;
+      forward.recurse = rdFlag;
+      forward.notify_allowed = notifyAllowed;
+      for (const auto& value : document["servers"].array_items()) {
+        forward.forwarders.emplace_back(value.string_value());
+      }
+      pdns::rust::settings::rec::api_add_forward_zone(yamlAPIZonesFile, std::move(forward));
+    }
+    else {
+      string serverlist;
+      for (const auto& value : document["servers"].array_items()) {
+        const string& server = value.string_value();
+        if (server.empty()) {
+          throw ApiException("Forwarded-to server must not be an empty string");
+        }
+        try {
+          ComboAddress address = parseIPAndPort(server, 53);
+          if (!serverlist.empty()) {
+            serverlist += ";";
+          }
+          serverlist += address.toStringWithPort();
+        }
+        catch (const PDNSException& e) {
+          throw ApiException(e.reason);
+        }
+      }
+      if (serverlist.empty()) {
+        throw ApiException("Need at least one upstream server when forwarding");
+      }
+
+      const string notifyAllowedConfig = notifyAllowed ? "\nallow-notify-for+=" + zonename : "";
+      if (rdFlag) {
+        apiWriteConfigFile(confbasename, "forward-zones-recurse+=" + zonename + "=" + serverlist + notifyAllowedConfig);
+      }
+      else {
+        apiWriteConfigFile(confbasename, "forward-zones+=" + zonename + "=" + serverlist + notifyAllowedConfig);
+      }
     }
   }
   else {
@@ -263,13 +330,17 @@ static bool doDeleteZone(const DNSName& zonename)
   }
 
   string filename;
-
-  // this one must exist
-  filename = ::arg()["api-config-dir"] + "/zone-" + apiZoneNameToId(zonename) + ".conf";
-  if (unlink(filename.c_str()) != 0) {
-    return false;
+  if (g_yamlSettings) {
+    const string yamlAPiZonesFile = ::arg()["api-config-dir"] + "/apizones";
+    pdns::rust::settings::rec::api_delete_zone(yamlAPiZonesFile, zonename.toString());
   }
-
+  else {
+    // this one must exist
+    filename = ::arg()["api-config-dir"] + "/zone-" + apiZoneNameToId(zonename) + ".conf";
+    if (unlink(filename.c_str()) != 0) {
+      return false;
+    }
+  }
   // .zone file is optional
   filename = ::arg()["api-config-dir"] + "/zone-" + apiZoneNameToId(zonename) + ".zone";
   unlink(filename.c_str());
@@ -277,37 +348,35 @@ static bool doDeleteZone(const DNSName& zonename)
   return true;
 }
 
-static void apiServerZones(HttpRequest* req, HttpResponse* resp)
+static void apiServerZonesPOST(HttpRequest* req, HttpResponse* resp)
 {
-  if (req->method == "POST") {
-    if (::arg()["api-config-dir"].empty()) {
-      throw ApiException("Config Option \"api-config-dir\" must be set");
-    }
-
-    Json document = req->json();
-
-    DNSName zonename = apiNameToDNSName(stringFromJson(document, "name"));
-
-    auto iter = SyncRes::t_sstorage.domainmap->find(zonename);
-    if (iter != SyncRes::t_sstorage.domainmap->end())
-      throw ApiException("Zone already exists");
-
-    doCreateZone(document);
-    reloadZoneConfiguration();
-    fillZone(zonename, resp);
-    resp->status = 201;
-    return;
+  if (::arg()["api-config-dir"].empty()) {
+    throw ApiException("Config Option \"api-config-dir\" must be set");
   }
 
-  if (req->method != "GET")
-    throw HttpMethodNotAllowedException();
+  Json document = req->json();
 
+  DNSName zonename = apiNameToDNSName(stringFromJson(document, "name"));
+
+  const auto& iter = SyncRes::t_sstorage.domainmap->find(zonename);
+  if (iter != SyncRes::t_sstorage.domainmap->cend()) {
+    throw ApiException("Zone already exists");
+  }
+
+  doCreateZone(document);
+  reloadZoneConfiguration(g_yamlSettings);
+  fillZone(zonename, resp);
+  resp->status = 201;
+}
+
+static void apiServerZonesGET(HttpRequest* /* req */, HttpResponse* resp)
+{
   Json::array doc;
-  for (const SyncRes::domainmap_t::value_type& val : *SyncRes::t_sstorage.domainmap) {
+  for (const auto& val : *SyncRes::t_sstorage.domainmap) {
     const SyncRes::AuthDomain& zone = val.second;
     Json::array servers;
-    for (const ComboAddress& server : zone.d_servers) {
-      servers.push_back(server.toStringWithPort());
+    for (const auto& server : zone.d_servers) {
+      servers.emplace_back(server.toStringWithPort());
     }
     // id is the canonical lookup key, which doesn't actually match the name (in some cases)
     string zoneId = apiZoneNameToId(val.first);
@@ -322,55 +391,58 @@ static void apiServerZones(HttpRequest* req, HttpResponse* resp)
   resp->setJsonBody(doc);
 }
 
-static void apiServerZoneDetail(HttpRequest* req, HttpResponse* resp)
+static inline DNSName findZoneById(HttpRequest* req)
 {
-  DNSName zonename = apiZoneIdToName(req->parameters["id"]);
-
-  SyncRes::domainmap_t::const_iterator iter = SyncRes::t_sstorage.domainmap->find(zonename);
-  if (iter == SyncRes::t_sstorage.domainmap->end())
+  auto zonename = apiZoneIdToName(req->parameters["id"]);
+  if (SyncRes::t_sstorage.domainmap->find(zonename) == SyncRes::t_sstorage.domainmap->end()) {
     throw ApiException("Could not find domain '" + zonename.toLogString() + "'");
+  }
+  return zonename;
+}
 
-  if (req->method == "PUT") {
-    Json document = req->json();
+static void apiServerZoneDetailPUT(HttpRequest* req, HttpResponse* resp)
+{
+  auto zonename = findZoneById(req);
+  const auto& document = req->json();
 
-    doDeleteZone(zonename);
-    doCreateZone(document);
-    reloadZoneConfiguration();
-    resp->body = "";
-    resp->status = 204; // No Content, but indicate success
-  }
-  else if (req->method == "DELETE") {
-    if (!doDeleteZone(zonename)) {
-      throw ApiException("Deleting domain failed");
-    }
+  doDeleteZone(zonename);
+  doCreateZone(document);
+  reloadZoneConfiguration(g_yamlSettings);
+  resp->body = "";
+  resp->status = 204; // No Content, but indicate success
+}
 
-    reloadZoneConfiguration();
-    // empty body on success
-    resp->body = "";
-    resp->status = 204; // No Content: declare that the zone is gone now
+static void apiServerZoneDetailDELETE(HttpRequest* req, HttpResponse* resp)
+{
+  auto zonename = findZoneById(req);
+  if (!doDeleteZone(zonename)) {
+    throw ApiException("Deleting domain failed");
   }
-  else if (req->method == "GET") {
-    fillZone(zonename, resp);
-  }
-  else {
-    throw HttpMethodNotAllowedException();
-  }
+
+  reloadZoneConfiguration(g_yamlSettings);
+  // empty body on success
+  resp->body = "";
+  resp->status = 204; // No Content: declare that the zone is gone now
+}
+
+static void apiServerZoneDetailGET(HttpRequest* req, HttpResponse* resp)
+{
+  auto zonename = findZoneById(req);
+  fillZone(zonename, resp);
 }
 
 static void apiServerSearchData(HttpRequest* req, HttpResponse* resp)
 {
-  if (req->method != "GET")
-    throw HttpMethodNotAllowedException();
-
-  string q = req->getvars["q"];
-  if (q.empty())
+  string qVar = req->getvars["q"];
+  if (qVar.empty()) {
     throw ApiException("Query q can't be blank");
+  }
 
   Json::array doc;
   for (const SyncRes::domainmap_t::value_type& val : *SyncRes::t_sstorage.domainmap) {
     string zoneId = apiZoneNameToId(val.first);
     string zoneName = val.first.toString();
-    if (pdns_ci_find(zoneName, q) != string::npos) {
+    if (pdns_ci_find(zoneName, qVar) != string::npos) {
       doc.push_back(Json::object{
         {"type", "zone"},
         {"zone_id", zoneId},
@@ -378,22 +450,23 @@ static void apiServerSearchData(HttpRequest* req, HttpResponse* resp)
     }
 
     // if zone name is an exact match, don't bother with returning all records/comments in it
-    if (val.first == DNSName(q)) {
+    if (val.first == DNSName(qVar)) {
       continue;
     }
 
     const SyncRes::AuthDomain& zone = val.second;
 
-    for (const SyncRes::AuthDomain::records_t::value_type& rr : zone.d_records) {
-      if (pdns_ci_find(rr.d_name.toString(), q) == string::npos && pdns_ci_find(rr.d_content->getZoneRepresentation(), q) == string::npos)
+    for (const SyncRes::AuthDomain::records_t::value_type& resourceRec : zone.d_records) {
+      if (pdns_ci_find(resourceRec.d_name.toString(), qVar) == string::npos && pdns_ci_find(resourceRec.getContent()->getZoneRepresentation(), qVar) == string::npos) {
         continue;
+      }
 
       doc.push_back(Json::object{
         {"type", "record"},
         {"zone_id", zoneId},
         {"zone_name", zoneName},
-        {"name", rr.d_name.toString()},
-        {"content", rr.d_content->getZoneRepresentation()}});
+        {"name", resourceRec.d_name.toString()},
+        {"content", resourceRec.getContent()->getZoneRepresentation()}});
     }
   }
   resp->setJsonBody(doc);
@@ -401,13 +474,10 @@ static void apiServerSearchData(HttpRequest* req, HttpResponse* resp)
 
 static void apiServerCacheFlush(HttpRequest* req, HttpResponse* resp)
 {
-  if (req->method != "PUT")
-    throw HttpMethodNotAllowedException();
-
   DNSName canon = apiNameToDNSName(req->getvars["domain"]);
-  bool subtree = (req->getvars.count("subtree") > 0 && req->getvars["subtree"].compare("true") == 0);
+  bool subtree = req->getvars.count("subtree") > 0 && req->getvars["subtree"] == "true";
   uint16_t qtype = 0xffff;
-  if (req->getvars.count("type")) {
+  if (req->getvars.count("type") != 0) {
     qtype = QType::chartocode(req->getvars["type"].c_str());
   }
 
@@ -417,11 +487,8 @@ static void apiServerCacheFlush(HttpRequest* req, HttpResponse* resp)
     {"result", "Flushed cache."}});
 }
 
-static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp)
+static void apiServerRPZStats(HttpRequest* /* req */, HttpResponse* resp)
 {
-  if (req->method != "GET")
-    throw HttpMethodNotAllowedException();
-
   auto luaconf = g_luaconfs.getLocal();
   auto numZones = luaconf->dfe.size();
 
@@ -429,12 +496,14 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp)
 
   for (size_t i = 0; i < numZones; i++) {
     auto zone = luaconf->dfe.getZone(i);
-    if (zone == nullptr)
+    if (zone == nullptr) {
       continue;
+    }
     const auto& name = zone->getName();
     auto stats = getRPZZoneStats(name);
-    if (stats == nullptr)
+    if (stats == nullptr) {
       continue;
+    }
     Json::object zoneInfo = {
       {"transfers_failed", (double)stats->d_failedTransfers},
       {"transfers_success", (double)stats->d_successfulTransfers},
@@ -448,12 +517,9 @@ static void apiServerRPZStats(HttpRequest* req, HttpResponse* resp)
   resp->setJsonBody(ret);
 }
 
-static void prometheusMetrics(HttpRequest* req, HttpResponse* resp)
+static void prometheusMetrics(HttpRequest* /* req */, HttpResponse* resp)
 {
   static MetricDefinitionStorage s_metricDefinitions;
-
-  if (req->method != "GET")
-    throw HttpMethodNotAllowedException();
 
   std::ostringstream output;
 
@@ -467,7 +533,7 @@ static void prometheusMetrics(HttpRequest* req, HttpResponse* resp)
     MetricDefinition metricDetails;
 
     if (s_metricDefinitions.getMetricDetails(metricName, metricDetails)) {
-      std::string prometheusTypeName = s_metricDefinitions.getPrometheusStringMetricType(
+      std::string prometheusTypeName = MetricDefinitionStorage::getPrometheusStringMetricType(
         metricDetails.d_prometheusType);
 
       if (prometheusTypeName.empty()) {
@@ -508,18 +574,23 @@ static void serveStuff(HttpRequest* req, HttpResponse* resp)
 {
   resp->headers["Cache-Control"] = "max-age=86400";
 
-  if (req->url.path == "/")
+  if (req->url.path == "/") {
     req->url.path = "/index.html";
+  }
 
   const string charset = "; charset=utf-8";
-  if (boost::ends_with(req->url.path, ".html"))
+  if (boost::ends_with(req->url.path, ".html")) {
     resp->headers["Content-Type"] = "text/html" + charset;
-  else if (boost::ends_with(req->url.path, ".css"))
+  }
+  else if (boost::ends_with(req->url.path, ".css")) {
     resp->headers["Content-Type"] = "text/css" + charset;
-  else if (boost::ends_with(req->url.path, ".js"))
+  }
+  else if (boost::ends_with(req->url.path, ".js")) {
     resp->headers["Content-Type"] = "application/javascript" + charset;
-  else if (boost::ends_with(req->url.path, ".png"))
+  }
+  else if (boost::ends_with(req->url.path, ".png")) {
     resp->headers["Content-Type"] = "image/png";
+  }
 
   resp->headers["X-Content-Type-Options"] = "nosniff";
   resp->headers["X-Frame-Options"] = "deny";
@@ -528,8 +599,8 @@ static void serveStuff(HttpRequest* req, HttpResponse* resp)
   resp->headers["X-XSS-Protection"] = "1; mode=block";
   //  resp->headers["Content-Security-Policy"] = "default-src 'self'; style-src 'self' 'unsafe-inline'";
 
-  if (!req->url.path.empty() && g_urlmap.count(req->url.path.c_str() + 1)) {
-    resp->body = g_urlmap.at(req->url.path.c_str() + 1);
+  if (!req->url.path.empty() && (g_urlmap.count(req->url.path.substr(1)) != 0)) {
+    resp->body = g_urlmap.at(req->url.path.substr(1));
     resp->status = 200;
   }
   else {
@@ -538,635 +609,11 @@ static void serveStuff(HttpRequest* req, HttpResponse* resp)
 }
 
 const std::map<std::string, MetricDefinition> MetricDefinitionStorage::d_metrics = {
-  {"all-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing UDP queries since starting")},
-
-  {"answers-slow",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered after 1 second")},
-  {"answers0-1",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered within 1 millisecond")},
-  {"answers1-10",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered within 10 milliseconds")},
-  {"answers10-100",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered within 100 milliseconds")},
-  {"answers100-1000",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered within 1 second")},
-
-  {"auth4-answers-slow",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv4 after 1 second")},
-  {"auth4-answers0-1",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv4within 1 millisecond")},
-  {"auth4-answers1-10",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv4 within 10 milliseconds")},
-  {"auth4-answers10-100",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv4 within 100 milliseconds")},
-  {"auth4-answers100-1000",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv4 within 1 second")},
-
-  {"auth6-answers-slow",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv6 after 1 second")},
-  {"auth6-answers0-1",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv6 within 1 millisecond")},
-  {"auth6-answers1-10",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv6 within 10 milliseconds")},
-  {"auth6-answers10-100",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv6 within 100 milliseconds")},
-  {"auth6-answers100-1000",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries answered by authoritatives over IPv6 within 1 second")},
-
-  {"auth-zone-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries to locally hosted authoritative zones (`setting-auth-zones`) since starting")},
-  {"cache-bytes",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Size of the cache in bytes")},
-  {"cache-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of entries in the cache")},
-  {"cache-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of of cache hits since starting, this does **not** include hits that got answered from the packet-cache")},
-  {"cache-misses",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of cache misses since starting")},
-  {"case-mismatches",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of mismatches in character case since starting")},
-  {"chain-resends",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries chained to existing outstanding")},
-  {"client-parse-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of client packets that could not be parsed")},
-  {"concurrent-queries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of MThreads currently running")},
-
-  // For multicounters, state the first
-  {"cpu-msec-thread-0",
-   MetricDefinition(PrometheusMetricType::multicounter,
-                    "Number of milliseconds spent in thread n")},
-
-  {"zone-disallowed-notify",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NOTIFY operations denied because of allow-notify-for restrictions")},
-  {"dnssec-authentic-data-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries received with the AD bit set")},
-  {"dnssec-check-disabled-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries received with the CD bit set")},
-  {"dnssec-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries received with the DO bit set")},
-  {"dnssec-result-bogus",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state")},
-  {"dnssec-result-indeterminate",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Indeterminate state")},
-  {"dnssec-result-insecure",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Insecure state")},
-  {"dnssec-result-nta",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the (negative trust anchor) state")},
-  {"dnssec-result-secure",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Secure state")},
-  {"x-dnssec-result-bogus",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state")},
-  {"x-dnssec-result-indeterminate",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Indeterminate state")},
-  {"x-dnssec-result-insecure",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Insecure state")},
-  {"x-dnssec-result-nta",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the (negative trust anchor) state")},
-  {"x-dnssec-result-secure",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Secure state")},
-
-  {"dnssec-validations",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, for which a DNSSEC validation was requested by either the client or the configuration")},
-  {"dont-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing queries dropped because of `setting-dont-query` setting")},
-  {"qname-min-fallback-success",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of successful queries due to fallback mechanism within 'qname-minimization' setting")},
-  {"ecs-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing queries adorned with an EDNS Client Subnet option")},
-  {"ecs-responses",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses received from authoritative servers with an EDNS Client Subnet option we used")},
-  {"edns-ping-matches",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of servers that sent a valid EDNS PING response")},
-  {"edns-ping-mismatches",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of servers that sent an invalid EDNS PING response")},
-  {"failed-host-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of entries in the failed NS cache")},
-  {"non-resolving-nameserver-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of entries in the non-resolving NS name cache")},
-  {"ignored-packets",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of non-query packets received on server sockets that should only get query packets")},
-  {"ipv6-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing queries over IPv6")},
-  {"ipv6-questions",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of end-user initiated queries with the RD bit set, received over IPv6 UDP")},
-  {"malloc-bytes",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of bytes allocated by the process (broken, always returns 0)")},
-  {"max-cache-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Currently configured maximum number of cache entries")},
-  {"max-packetcache-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Currently configured maximum number of packet cache entries")},
-  {"max-mthread-stack",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Maximum amount of thread stack ever used")},
-
-  {"negcache-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of entries in the negative answer cache")},
-  {"no-packet-error",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of erroneous received packets")},
-  {"nod-lookups-dropped-oversize",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NOD lookups dropped because they would exceed the maximum name length")},
-  {"noedns-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries sent out without EDNS")},
-  {"noerror-answers",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NOERROR answers since starting")},
-  {"noping-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries sent out without ENDS PING")},
-  {"nsset-invalidations",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of times an nsset was dropped because it no longer worked")},
-  {"nsspeeds-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of entries in the NS speeds map")},
-  {"nxdomain-answers",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NXDOMAIN answers since starting")},
-  {"outgoing-timeouts",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of timeouts on outgoing UDP queries since starting")},
-  {"outgoing4-timeouts",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of timeouts on outgoing UDP IPv4 queries since starting")},
-  {"outgoing6-timeouts",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of timeouts on outgoing UDP IPv6 queries since starting")},
-  {"over-capacity-drops",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of questions dropped because over maximum concurrent query limit")},
-  {"packetcache-bytes",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Size of the packet cache in bytes")},
-  {"packetcache-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of packet cache entries")},
-  {"packetcache-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packet cache hits")},
-  {"packetcache-misses",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packet cache misses")},
-
-  {"policy-drops",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets dropped because of (Lua) policy decision")},
-  {"policy-result-noaction",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were not acted upon by the RPZ/filter engine")},
-  {"policy-result-drop",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were dropped by the RPZ/filter engine")},
-  {"policy-result-nxdomain",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were replied to with NXDOMAIN by the RPZ/filter engine")},
-  {"policy-result-nodata",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were replied to with no data by the RPZ/filter engine")},
-  {"policy-result-truncate",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were were forced to TCP by the RPZ/filter engine")},
-  {"policy-result-custom",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of packets that were sent a custom answer by the RPZ/filter engine")},
-
-  {"qa-latency",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Shows the current latency average, in microseconds, exponentially weighted over past 'latency-statistic-size' packets")},
-  {"query-pipe-full-drops",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of questions dropped because the query distribution pipe was full")},
-  {"questions",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts all end-user initiated queries with the RD bit set")},
-  {"rebalanced-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries balanced to a different worker thread because the first selected one was above the target load configured with 'distribution-load-factor'")},
-  {"resource-limits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of queries that could not be performed because of resource limits")},
-  {"security-status",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "security status based on `securitypolling`")},
-  {"server-parse-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of server replied packets that could not be parsed")},
-  {"servfail-answers",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of SERVFAIL answers since starting")},
-  {"spoof-prevents",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of times PowerDNS considered itself spoofed, and dropped the data")},
-  {"sys-msec",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of CPU milliseconds spent in 'system' mode")},
-  {"tcp-client-overflow",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of times an IP address was denied TCP access because it already had too many connections")},
-  {"tcp-clients",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of currently active TCP/IP clients")},
-  {"tcp-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing TCP queries since starting")},
-  {"tcp-questions",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of all incoming TCP queries since starting")},
-  {"throttle-entries",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of of entries in the throttle map")},
-  {"throttled-out",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of throttled outgoing UDP queries since starting")},
-  {"throttled-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of throttled outgoing UDP queries since starting")},
-  {"too-old-drops",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of questions dropped that were too old")},
-  {"truncated-drops",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of questions dropped because they were larger than 512 bytes")},
-  {"empty-queries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Questions dropped because they had a QD count of 0")},
-  {"unauthorized-tcp",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of TCP questions denied because of allow-from restrictions")},
-  {"unauthorized-udp",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of UDP questions denied because of allow-from restrictions")},
-  {"source-disallowed-notify",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NOTIFY operations denied because of allow-notify-from restrictions")},
-  {"unexpected-packets",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of answers from remote servers that were unexpected (might point to spoofing)")},
-  {"unreachables",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of times nameservers were unreachable since starting")},
-  {"uptime",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of seconds process has been running")},
-  {"user-msec",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of CPU milliseconds spent in 'user' mode")},
-  {"variable-responses",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses that were marked as 'variable'")},
-
-  {"x-our-latency",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Shows the averaged time spent within PowerDNS, in microseconds, exponentially weighted over past 'latency-statistic-size' packets")},
-  {"x-ourtime0-1",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 0 and 1 milliseconds was spent within the Recursor")},
-  {"x-ourtime1-2",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 1 and 2 milliseconds was spent within the Recursor")},
-  {"x-ourtime2-4",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 2 and 4 milliseconds was spent within the Recursor")},
-  {"x-ourtime4-8",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 4 and 8 milliseconds was spent within the Recursor")},
-  {"x-ourtime8-16",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 8 and 16 milliseconds was spent within the Recursor")},
-  {"x-ourtime16-32",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where between 16 and 32 milliseconds was spent within the Recursor")},
-  {"x-ourtime-slow",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Counts responses where more than 32 milliseconds was spent within the Recursor")},
-
-  {"fd-usage",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of open file descriptors")},
-  {"real-memory-usage",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of bytes real process memory usage")},
-  {"udp-in-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp InErrors")},
-  {"udp-noport-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp NoPorts")},
-  {"udp-recvbuf-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp RcvbufErrors")},
-  {"udp-sndbuf-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp SndbufErrors")},
-  {"udp-in-csum-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp InCsumErrors")},
-  {"udp6-in-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp6 InErrors")},
-  {"udp6-noport-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp6 NoPorts")},
-  {"udp6-recvbuf-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp6 RcvbufErrors")},
-  {"udp6-sndbuf-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp6 SndbufErrors")},
-  {"udp6-in-csum-errors",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "From /proc/net/snmp6 InCsumErrors")},
-
-  {"cpu-iowait",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Time spent waiting for I/O to complete by the whole system, in units of USER_HZ")},
-  {"cpu-steal",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Stolen time, which is the time spent by the whole system in other operating systems when running in a virtualized environment, in units of USER_HZ")},
-
-  {"dnssec-result-bogus-invalid-denial",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid denial of existence proof could not be found")},
-
-  {"dnssec-result-bogus-invalid-dnskey-protocol",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because all DNSKEYs had invalid protocols")},
-
-  {"dnssec-result-bogus-missing-negative-indication",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a NODATA or NXDOMAIN answer lacked the required SOA and/or NSEC(3) records")},
-
-  {"dnssec-result-bogus-no-rrsig",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because required RRSIG records were not present in an answer")},
-
-  {"dnssec-result-bogus-no-valid-dnskey",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DNSKEY could not be found")},
-
-  {"dnssec-result-bogus-no-valid-rrsig",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because only invalid RRSIG records were present in an answer")},
-
-  {"dnssec-result-bogus-no-zone-key-bit-set",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because no DNSKEY with the Zone Key bit set was found")},
-
-  {"dnssec-result-bogus-revoked-dnskey",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because all DNSKEYs were revoked")},
-
-  {"dnssec-result-bogus-self-signed-ds",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DS record was signed by itself")},
-
-  {"dnssec-result-bogus-signature-expired",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because the signature expired time in the RRSIG was in the past")},
-
-  {"dnssec-result-bogus-signature-not-yet-valid",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because the signature inception time in the RRSIG was not yet valid")},
-
-  {"dnssec-result-bogus-unable-to-get-dnskeys",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DNSKEY could not be retrieved")},
-
-  {"dnssec-result-bogus-unable-to-get-dss",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DS could not be retrieved")},
-  {"dnssec-result-bogus-unsupported-dnskey-algo",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DNSKEY RRset contained only unsupported DNSSEC algorithms")},
-
-  {"dnssec-result-bogus-unsupported-ds-digest-type",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DS RRset contained only unsupported digest types")},
-  {"x-dnssec-result-bogus-invalid-denial",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid denial of existence proof could not be found")},
-
-  {"x-dnssec-result-bogus-invalid-dnskey-protocol",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because all DNSKEYs had invalid protocols")},
-
-  {"x-dnssec-result-bogus-missing-negative-indication",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a NODATA or NXDOMAIN answer lacked the required SOA and/or NSEC(3) records")},
-
-  {"x-dnssec-result-bogus-no-rrsig",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because required RRSIG records were not present in an answer")},
-
-  {"x-dnssec-result-bogus-no-valid-dnskey",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DNSKEY could not be found")},
-
-  {"x-dnssec-result-bogus-no-valid-rrsig",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because only invalid RRSIG records were present in an answer")},
-
-  {"x-dnssec-result-bogus-no-zone-key-bit-set",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because no DNSKEY with the Zone Key bit set was found")},
-
-  {"x-dnssec-result-bogus-revoked-dnskey",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because all DNSKEYs were revoked")},
-
-  {"x-dnssec-result-bogus-self-signed-ds",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DS record was signed by itself")},
-
-  {"x-dnssec-result-bogus-signature-expired",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because the signature expired time in the RRSIG was in the past")},
-
-  {"x-dnssec-result-bogus-signature-not-yet-valid",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because the signature inception time in the RRSIG was not yet valid")},
-
-  {"x-dnssec-result-bogus-unable-to-get-dnskeys",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DNSKEY could not be retrieved")},
-
-  {"x-dnssec-result-bogus-unable-to-get-dss",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a valid DS could not be retrieved")},
-  {"x-dnssec-result-bogus-unsupported-dnskey-algo",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DNSKEY RRset contained only unsupported DNSSEC algorithms")},
-
-  {"x-dnssec-result-bogus-unsupported-ds-digest-type",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of responses sent, packet-cache hits excluded, that were in the Bogus state because a DS RRset contained only unsupported digest types")},
-
-  {"proxy-protocol-invalid",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of invalid proxy-protocol headers received")},
-
-  {"record-cache-acquired",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of record cache lock acquisitions")},
-
-  {"record-cache-contended",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of contented record cache lock acquisitions")},
-
-  {"taskqueue-expired",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of tasks expired before they could be run")},
-
-  {"taskqueue-pushed",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of tasks pushed to the taskqueues")},
-
-  {"taskqueue-size",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of tasks currently in the taskqueue")},
-
-  {"dot-outqueries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of outgoing DoT queries since starting")},
-
-  {"dns64-prefix-answers",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of AAAA and PTR generated by a matching dns64-prefix")},
-  {"aggressive-nsec-cache-entries",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of entries in the aggressive NSEC cache")},
-
-  {"aggressive-nsec-cache-nsec-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NSEC-related hits from the aggressive NSEC cache")},
-
-  {"aggressive-nsec-cache-nsec-wc-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of answers synthesized from the NSEC aggressive cache")},
-
-  {"aggressive-nsec-cache-nsec3-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of NSEC3-related hits from the aggressive NSEC cache")},
-
-  {"aggressive-nsec-cache-nsec3-wc-hits",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of answers synthesized from the NSEC3 aggressive cache")},
-
-  // For cumulative histogram, state the xxx_count name where xxx matches the name in rec_channel_rec
-  {"cumul-clientanswers-count",
-   MetricDefinition(PrometheusMetricType::histogram,
-                    "histogram of our answer times to clients")},
-  // For cumulative histogram, state the xxx_count name where xxx matches the name in rec_channel_rec
-  {"cumul-authanswers-count4",
-   MetricDefinition(PrometheusMetricType::histogram,
-                    "histogram of answer times of authoritative servers")},
-  {"almost-expired-pushed",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of almost-expired tasks pushed")},
-
-  {"almost-expired-run",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of almost-expired tasks run to completion")},
-
-  {"almost-expired-exceptions",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of almost-expired tasks that caused an exception")},
-
-  // For multicounters, state the first
-  {"policy-hits",
-   MetricDefinition(PrometheusMetricType::multicounter,
-                    "Number of filter or RPZ policy hits")},
-
-  {"idle-tcpout-connections",
-   MetricDefinition(PrometheusMetricType::gauge,
-                    "Number of connections in the TCP idle outgoing connections pool")},
-
-  {"maintenance-usec",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Time spent doing internal maintenance, including Lua maintenance")},
-
-  {"maintenance-calls",
-   MetricDefinition(PrometheusMetricType::counter,
-                    "Number of times internal maintenance has been called, including Lua maintenance")},
-
-  // For multicounters, state the first
-  {"proxy-mapping-total-n-0",
-   MetricDefinition(PrometheusMetricType::multicounter,
-                    "Number of queries matching proxyMappings")},
-
-  // For multicounters, state the first
-  {"auth-formerr-answers",
-   MetricDefinition(PrometheusMetricType::multicounter,
-                    "Count of RCodes returned by authoritative servers")},
-
-  // For multicounters, state the first
-  {"remote-logger-count-o-0",
-   MetricDefinition(PrometheusMetricType::multicounter,
-                    "Number of remote logging events")},
+#include "rec-prometheus-gen.h"
 };
 
-#define CHECK_PROMETHEUS_METRICS 0
+constexpr bool CHECK_PROMETHEUS_METRICS = false;
 
-#if CHECK_PROMETHEUS_METRICS
 static void validatePrometheusMetrics()
 {
   MetricDefinitionStorage s_metricDefinitions;
@@ -1174,10 +621,17 @@ static void validatePrometheusMetrics()
   auto varmap = getAllStatsMap(StatComponent::API);
   for (const auto& tup : varmap) {
     std::string metricName = tup.first;
+    // A few special cases not handled correctly by the check below
     if (metricName.find("cpu-msec-") == 0) {
       continue;
     }
     if (metricName.find("cumul-") == 0) {
+      continue;
+    }
+    if (metricName.find("auth-") == 0 && metricName.find("-answers") != string::npos) {
+      continue;
+    }
+    if (metricName.find("proxy-mapping-total") == 0) {
       continue;
     }
     MetricDefinition metricDetails;
@@ -1188,13 +642,12 @@ static void validatePrometheusMetrics()
     }
   }
 }
-#endif
 
 RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
 {
-#if CHECK_PROMETHEUS_METRICS
-  validatePrometheusMetrics();
-#endif
+  if (CHECK_PROMETHEUS_METRICS) {
+    validatePrometheusMetrics();
+  }
 
   d_ws = make_unique<AsyncWebServer>(fdm, arg()["webserver-address"], arg().asNum("webserver-port"));
   d_ws->setSLog(g_slog->withName("webserver"));
@@ -1211,27 +664,32 @@ RecursorWebServer::RecursorWebServer(FDMultiplexer* fdm)
 
   // legacy dispatch
   d_ws->registerApiHandler(
-    "/jsonstat", [this](HttpRequest* req, HttpResponse* resp) { jsonstat(req, resp); }, true);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/cache/flush", apiServerCacheFlush);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-from", apiServerConfigAllowFrom);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-notify-from", &apiServerConfigAllowNotifyFrom);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/config", apiServerConfig);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/rpzstatistics", apiServerRPZStats);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/search-data", apiServerSearchData);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/statistics", apiServerStatistics, true);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/zones/<id>", apiServerZoneDetail);
-  d_ws->registerApiHandler("/api/v1/servers/localhost/zones", apiServerZones);
-  d_ws->registerApiHandler("/api/v1/servers/localhost", apiServerDetail, true);
-  d_ws->registerApiHandler("/api/v1/servers", apiServer);
-  d_ws->registerApiHandler("/api/v1", apiDiscoveryV1);
-  d_ws->registerApiHandler("/api", apiDiscovery);
+    "/jsonstat", [](HttpRequest* req, HttpResponse* resp) { jsonstat(req, resp); }, "GET", true);
+  d_ws->registerApiHandler("/api/v1/servers/localhost/cache/flush", apiServerCacheFlush, "PUT");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-from", apiServerConfigAllowFromPUT, "PUT");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-from", apiServerConfigAllowFromGET, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-notify-from", apiServerConfigAllowNotifyFromGET, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/config/allow-notify-from", apiServerConfigAllowNotifyFromPUT, "PUT");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/config", apiServerConfig, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/rpzstatistics", apiServerRPZStats, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/search-data", apiServerSearchData, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/statistics", apiServerStatistics, "GET", true);
+  d_ws->registerApiHandler("/api/v1/servers/localhost/zones/<id>", apiServerZoneDetailGET, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/zones/<id>", apiServerZoneDetailPUT, "PUT");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/zones/<id>", apiServerZoneDetailDELETE, "DELETE");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/zones", apiServerZonesGET, "GET");
+  d_ws->registerApiHandler("/api/v1/servers/localhost/zones", apiServerZonesPOST, "POST");
+  d_ws->registerApiHandler("/api/v1/servers/localhost", apiServerDetail, "GET", true);
+  d_ws->registerApiHandler("/api/v1/servers", apiServer, "GET");
+  d_ws->registerApiHandler("/api/v1", apiDiscoveryV1, "GET");
+  d_ws->registerApiHandler("/api", apiDiscovery, "GET");
 
-  for (const auto& u : g_urlmap) {
-    d_ws->registerWebHandler("/" + u.first, serveStuff);
+  for (const auto& url : g_urlmap) {
+    d_ws->registerWebHandler("/" + url.first, serveStuff, "GET");
   }
 
-  d_ws->registerWebHandler("/", serveStuff);
-  d_ws->registerWebHandler("/metrics", prometheusMetrics);
+  d_ws->registerWebHandler("/", serveStuff, "GET");
+  d_ws->registerWebHandler("/metrics", prometheusMetrics, "GET");
   d_ws->go();
 }
 
@@ -1239,7 +697,7 @@ void RecursorWebServer::jsonstat(HttpRequest* req, HttpResponse* resp)
 {
   string command;
 
-  if (req->getvars.count("command")) {
+  if (req->getvars.count("command") != 0) {
     command = req->getvars["command"];
     req->getvars.erase("command");
   }
@@ -1250,38 +708,44 @@ void RecursorWebServer::jsonstat(HttpRequest* req, HttpResponse* resp)
     vector<query_t> queries;
     bool filter = !req->getvars["public-filtered"].empty();
 
-    if (req->getvars["name"] == "servfail-queries")
+    if (req->getvars["name"] == "servfail-queries") {
       queries = broadcastAccFunction<vector<query_t>>(pleaseGetServfailQueryRing);
-    else if (req->getvars["name"] == "bogus-queries")
+    }
+    else if (req->getvars["name"] == "bogus-queries") {
       queries = broadcastAccFunction<vector<query_t>>(pleaseGetBogusQueryRing);
-    else if (req->getvars["name"] == "queries")
+    }
+    else if (req->getvars["name"] == "queries") {
       queries = broadcastAccFunction<vector<query_t>>(pleaseGetQueryRing);
+    }
 
     typedef map<query_t, unsigned int> counts_t;
     counts_t counts;
-    unsigned int total = 0;
-    for (const query_t& q : queries) {
-      total++;
-      if (filter)
-        counts[pair(getRegisteredName(q.first), q.second)]++;
-      else
-        counts[pair(q.first, q.second)]++;
+    for (const query_t& count : queries) {
+      if (filter) {
+        counts[pair(getRegisteredName(count.first), count.second)]++;
+      }
+      else {
+        counts[pair(count.first, count.second)]++;
+      }
     }
 
     typedef std::multimap<int, query_t> rcounts_t;
     rcounts_t rcounts;
 
-    for (counts_t::const_iterator i = counts.begin(); i != counts.end(); ++i)
-      rcounts.emplace(-i->second, i->first);
+    for (const auto& count : counts) {
+      rcounts.emplace(-count.second, count.first);
+    }
 
     Json::array entries;
-    unsigned int tot = 0, totIncluded = 0;
-    for (const rcounts_t::value_type& q : rcounts) {
-      totIncluded -= q.first;
+    unsigned int tot = 0;
+    unsigned int totIncluded = 0;
+    for (const rcounts_t::value_type& count : rcounts) {
+      totIncluded -= count.first;
       entries.push_back(Json::array{
-        -q.first, q.second.first.toLogString(), DNSRecordContent::NumberToType(q.second.second)});
-      if (tot++ >= 100)
+        -count.first, count.second.first.toLogString(), DNSRecordContent::NumberToType(count.second.second)});
+      if (tot++ >= 100) {
         break;
+      }
     }
     if (queries.size() != totIncluded) {
       entries.push_back(Json::array{
@@ -1290,41 +754,46 @@ void RecursorWebServer::jsonstat(HttpRequest* req, HttpResponse* resp)
     resp->setJsonBody(Json::object{{"entries", entries}});
     return;
   }
-  else if (command == "get-remote-ring") {
+  if (command == "get-remote-ring") {
     vector<ComboAddress> queries;
-    if (req->getvars["name"] == "remotes")
+    if (req->getvars["name"] == "remotes") {
       queries = broadcastAccFunction<vector<ComboAddress>>(pleaseGetRemotes);
-    else if (req->getvars["name"] == "servfail-remotes")
+    }
+    else if (req->getvars["name"] == "servfail-remotes") {
       queries = broadcastAccFunction<vector<ComboAddress>>(pleaseGetServfailRemotes);
-    else if (req->getvars["name"] == "bogus-remotes")
+    }
+    else if (req->getvars["name"] == "bogus-remotes") {
       queries = broadcastAccFunction<vector<ComboAddress>>(pleaseGetBogusRemotes);
-    else if (req->getvars["name"] == "large-answer-remotes")
+    }
+    else if (req->getvars["name"] == "large-answer-remotes") {
       queries = broadcastAccFunction<vector<ComboAddress>>(pleaseGetLargeAnswerRemotes);
-    else if (req->getvars["name"] == "timeouts")
+    }
+    else if (req->getvars["name"] == "timeouts") {
       queries = broadcastAccFunction<vector<ComboAddress>>(pleaseGetTimeouts);
-
+    }
     typedef map<ComboAddress, unsigned int, ComboAddress::addressOnlyLessThan> counts_t;
     counts_t counts;
-    unsigned int total = 0;
-    for (const ComboAddress& q : queries) {
-      total++;
-      counts[q]++;
+    for (const ComboAddress& query : queries) {
+      counts[query]++;
     }
 
     typedef std::multimap<int, ComboAddress> rcounts_t;
     rcounts_t rcounts;
 
-    for (counts_t::const_iterator i = counts.begin(); i != counts.end(); ++i)
-      rcounts.emplace(-i->second, i->first);
+    for (const auto& count : counts) {
+      rcounts.emplace(-count.second, count.first);
+    }
 
     Json::array entries;
-    unsigned int tot = 0, totIncluded = 0;
-    for (const rcounts_t::value_type& q : rcounts) {
-      totIncluded -= q.first;
+    unsigned int tot = 0;
+    unsigned int totIncluded = 0;
+    for (const rcounts_t::value_type& count : rcounts) {
+      totIncluded -= count.first;
       entries.push_back(Json::array{
-        -q.first, q.second.toString()});
-      if (tot++ >= 100)
+        -count.first, count.second.toString()});
+      if (tot++ >= 100) {
         break;
+      }
     }
     if (queries.size() != totIncluded) {
       entries.push_back(Json::array{
@@ -1334,14 +803,12 @@ void RecursorWebServer::jsonstat(HttpRequest* req, HttpResponse* resp)
     resp->setJsonBody(Json::object{{"entries", entries}});
     return;
   }
-  else {
-    resp->setErrorResult("Command '" + command + "' not found", 404);
-  }
+  resp->setErrorResult("Command '" + command + "' not found", 404);
 }
 
-void AsyncServerNewConnectionMT(void* p)
+void AsyncServerNewConnectionMT(void* arg)
 {
-  AsyncServer* server = (AsyncServer*)p;
+  auto* server = static_cast<AsyncServer*>(arg);
 
   try {
     auto socket = server->accept(); // this is actually a shared_ptr
@@ -1375,9 +842,9 @@ void AsyncServer::newConnection()
 }
 
 // This is an entry point from FDM, so it needs to catch everything.
-void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
+void AsyncWebServer::serveConnection(const std::shared_ptr<Socket>& socket) const // NOLINT(readability-function-cognitive-complexity) #12791 Remove NOLINT(readability-function-cognitive-complexity) omoerbeek
 {
-  if (!client->acl(d_acl)) {
+  if (!socket->acl(d_acl)) {
     return;
   }
 
@@ -1398,7 +865,7 @@ void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
   try {
     YaHTTP::AsyncRequestLoader yarl;
     yarl.initialize(&req);
-    client->setNonBlocking();
+    socket->setNonBlocking();
 
     const struct timeval timeout
     {
@@ -1406,16 +873,16 @@ void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
     };
     std::shared_ptr<TLSCtx> tlsCtx{nullptr};
     if (d_loglevel > WebServer::LogLevel::None) {
-      client->getRemote(remote);
+      socket->getRemote(remote);
     }
-    auto handler = std::make_shared<TCPIOHandler>("", false, client->releaseHandle(), timeout, tlsCtx, time(nullptr));
+    auto handler = std::make_shared<TCPIOHandler>("", false, socket->releaseHandle(), timeout, tlsCtx);
 
     PacketBuffer data;
     try {
       while (!req.complete) {
         auto ret = arecvtcp(data, 16384, handler, true);
         if (ret == LWResult::Result::Success) {
-          string str(reinterpret_cast<const char*>(data.data()), data.size());
+          string str(reinterpret_cast<const char*>(data.data()), data.size()); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast): safe cast, data.data() returns unsigned char *
           req.complete = yarl.feed(str);
         }
         else {
@@ -1431,13 +898,16 @@ void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
            req.d_slog->error(Logr::Warning, e.what(), "Unable to parse request"));
     }
 
+    if (!validURL(req.url)) {
+      throw PDNSException("Received request with invalid URL");
+    }
     logRequest(req, remote);
 
     WebServer::handleRequest(req, resp);
-    ostringstream ss;
-    resp.write(ss);
-    const string& s = ss.str();
-    reply.insert(reply.end(), s.cbegin(), s.cend());
+    ostringstream stringStream;
+    resp.write(stringStream);
+    const string& str = stringStream.str();
+    reply.insert(reply.end(), str.cbegin(), str.cend());
 
     logResponse(resp, remote, logprefix);
 
@@ -1447,35 +917,37 @@ void AsyncWebServer::serveConnection(std::shared_ptr<Socket> client) const
            req.d_slog->info(Logr::Error, "Failed sending reply to HTTP client"));
     }
     handler->close(); // needed to signal "done" to client
+    if (d_loglevel >= WebServer::LogLevel::Normal) {
+      SLOG(g_log << Logger::Notice << logprefix << remote << " \"" << req.method << " " << req.url.path << " HTTP/" << req.versionStr(req.version) << "\" " << resp.status << " " << reply.size() << endl,
+           req.d_slog->info(Logr::Info, "Request", "remote", Logging::Loggable(remote), "method", Logging::Loggable(req.method),
+                            "urlpath", Logging::Loggable(req.url.path), "HTTPVersion", Logging::Loggable(req.versionStr(req.version)),
+                            "status", Logging::Loggable(resp.status), "respsize", Logging::Loggable(reply.size())));
+    }
   }
   catch (PDNSException& e) {
     SLOG(g_log << Logger::Error << logprefix << "Exception: " << e.reason << endl,
          req.d_slog->error(Logr::Error, e.reason, "Exception handing request", "exception", Logging::Loggable("PDNSException")));
   }
   catch (std::exception& e) {
-    if (strstr(e.what(), "timeout") == 0)
+    if (strstr(e.what(), "timeout") == nullptr) {
       SLOG(g_log << Logger::Error << logprefix << "STL Exception: " << e.what() << endl,
            req.d_slog->error(Logr::Error, e.what(), "Exception handing request", "exception", Logging::Loggable("std::exception")));
+    }
   }
   catch (...) {
     SLOG(g_log << Logger::Error << logprefix << "Unknown exception" << endl,
-         req.d_slog->error(Logr::Error, "Exception handing request"))
-  }
-
-  if (d_loglevel >= WebServer::LogLevel::Normal) {
-    SLOG(g_log << Logger::Notice << logprefix << remote << " \"" << req.method << " " << req.url.path << " HTTP/" << req.versionStr(req.version) << "\" " << resp.status << " " << reply.size() << endl,
-         req.d_slog->info(Logr::Info, "Request", "remote", Logging::Loggable(remote), "method", Logging::Loggable(req.method),
-                          "urlpath", Logging::Loggable(req.url.path), "HTTPVersion", Logging::Loggable(req.versionStr(req.version)),
-                          "status", Logging::Loggable(resp.status), "respsize", Logging::Loggable(reply.size())));
+         req.d_slog->error(Logr::Error, "Exception handing request"));
   }
 }
 
 void AsyncWebServer::go()
 {
-  if (!d_server)
+  if (!d_server) {
     return;
+  }
   auto server = std::dynamic_pointer_cast<AsyncServer>(d_server);
-  if (!server)
+  if (!server) {
     return;
-  server->asyncWaitForConnections(d_fdm, [this](const std::shared_ptr<Socket>& c) { serveConnection(c); });
+  }
+  server->asyncWaitForConnections(d_fdm, [this](const std::shared_ptr<Socket>& socket) { serveConnection(socket); });
 }

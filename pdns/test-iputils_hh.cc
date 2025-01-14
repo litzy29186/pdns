@@ -1,5 +1,9 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -264,6 +268,24 @@ BOOST_AUTO_TEST_CASE(test_Netmask) {
   BOOST_CHECK(all < empty);
   BOOST_CHECK(empty > full);
   BOOST_CHECK(full < empty);
+
+  /* invalid (too large) mask */
+  {
+    Netmask invalidMaskV4("192.0.2.1/33");
+    BOOST_CHECK_EQUAL(invalidMaskV4.getBits(), 32U);
+    BOOST_CHECK(invalidMaskV4.getNetwork() == ComboAddress("192.0.2.1"));
+    Netmask invalidMaskV6("fe80::92fb:a6ff:fe4a:51da/129");
+    BOOST_CHECK_EQUAL(invalidMaskV6.getBits(), 128U);
+    BOOST_CHECK(invalidMaskV6.getNetwork() == ComboAddress("fe80::92fb:a6ff:fe4a:51da"));
+  }
+  {
+    Netmask invalidMaskV4(ComboAddress("192.0.2.1"), 33);
+    BOOST_CHECK_EQUAL(invalidMaskV4.getBits(), 32U);
+    BOOST_CHECK(invalidMaskV4.getNetwork() == ComboAddress("192.0.2.1"));
+    Netmask invalidMaskV6(ComboAddress("fe80::92fb:a6ff:fe4a:51da"), 129);
+    BOOST_CHECK_EQUAL(invalidMaskV6.getBits(), 128U);
+    BOOST_CHECK(invalidMaskV6.getNetwork() == ComboAddress("fe80::92fb:a6ff:fe4a:51da"));
+  }
 }
 
 static std::string NMGOutputToSorted(const std::string& str)

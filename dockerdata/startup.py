@@ -36,7 +36,8 @@ webserver-password={{ apikey }}
 elif product == 'dnsdist':
     args = ['--supervised', '--disable-syslog']
     apienvvar = 'DNSDIST_API_KEY'
-    apiconftemplate = """webserver("0.0.0.0:8083", '{{ apikey }}', '{{ apikey }}', {}, '0.0.0.0/0')
+    apiconftemplate = """webserver("0.0.0.0:8083")
+    setWebserverConfig({password='{{ apikey }}', apiKey='{{ apikey }}', acl='0.0.0.0/0'})
 controlSocket('0.0.0.0:5199')
 setKey('{{ apikey }}')
 setConsoleACL('0.0.0.0/0')
@@ -44,13 +45,16 @@ setConsoleACL('0.0.0.0/0')
     templateroot = '/etc/dnsdist/templates.d'
     templatedestination = '/etc/dnsdist/conf.d'
 
+debug = os.getenv("DEBUG_CONFIG", 'no').lower() == 'yes'
+
 apikey = os.getenv(apienvvar)
 if apikey is not None:
     webserver_conf = jinja2.Template(apiconftemplate).render(apikey=apikey)
     conffile = os.path.join(templatedestination, '_api.conf')
     with open(conffile, 'w') as f:
         f.write(webserver_conf)
-    print("Created {} with content:\n{}\n".format(conffile, webserver_conf))
+    if debug:
+        print("Created {} with content:\n{}\n".format(conffile, webserver_conf))
 
 templates = os.getenv('TEMPLATE_FILES')
 if templates is not None:
@@ -62,6 +66,7 @@ if templates is not None:
         target = os.path.join(templatedestination, templateFile + '.conf')
         with open(target, 'w') as f:
             f.write(rendered)
-        print("Created {} with content:\n{}\n".format(target, rendered))
+        if debug:
+            print("Created {} with content:\n{}\n".format(target, rendered))
 
 os.execv(program, [program]+args+sys.argv[1:])

@@ -27,7 +27,7 @@ To stop the recursor by hand, run::
 
   # rec_control quit
 
-To dump the cache to disk, execute::
+To dump the caches to disk, execute::
 
   # rec_control dump-cache /tmp/the-cache
 
@@ -48,13 +48,15 @@ Options
                       control.
 --timeout=<num>       Number of seconds to wait for the remote PowerDNS
                       Recursor to respond.
+--version             Show the version number of this program. Note that the **version**
+                      command shows the version of the running recursor.
 
 Commands
 --------
-add-dont-throttle-names NAME [NAME...]
+add-dont-throttle-names *NAME* [*NAME*...]
     Add names for nameserver domains that may not be throttled.
 
-add-dont-throttle-netmasks NETMASK [NETMASK...]
+add-dont-throttle-netmasks *NETMASK* [*NETMASK*...]
     Add netmasks for nameservers that may not be throttled.
 
 add-nta *DOMAIN* [*REASON*]
@@ -68,29 +70,29 @@ add-ta *DOMAIN* *DSRECORD*
 current-queries
     Shows the currently active queries.
 
-clear-dont-throttle-names NAME [NAME...]
-    Remove names that are not allowed to be throttled. If *NAME* is '*', remove all
+clear-dont-throttle-names *NAME* [*NAME*...]
+    Remove names that are not allowed to be throttled. If *NAME* is ``*``, remove all
 
-clear-dont-throttle-netmasks NETMASK [NETMASK...]
-    Remove netmasks that are not allowed to be throttled. If *NETMASK* is '*', remove all
+clear-dont-throttle-netmasks *NETMASK* [*NETMASK*...]
+    Remove netmasks that are not allowed to be throttled. If *NETMASK* is ``*``, remove all
 
 clear-nta *DOMAIN*...
     Remove Negative Trust Anchor for one or more *DOMAIN*\ s. Set domain to
-    '*' to remove all NTA's.
+    ``*`` to remove all NTA's.
 
 clear-ta [*DOMAIN*]...
     Remove Trust Anchor for one or more *DOMAIN*\ s. Note that removing the
     root trust anchor is not possible.
 
-dump-cache *FILENAME*
-    Dumps the entire cache to *FILENAME*. This file should not exist already,
+dump-cache *FILENAME* [*TYPE*...]
+    Dumps caches to *FILENAME*. This file should not exist already,
     PowerDNS will refuse to overwrite it. While dumping, the recursor
     might not answer questions.
 
-    Typical PowerDNS Recursors run multiple threads, therefore you'll see
-    duplicate, different entries for the same domains. The negative cache is
-    also dumped to the same file. The per-thread positive and negative cache
-    dumps are separated with an appropriate comment.
+    If no *TYPE* is specified the record cache, the negative cache,
+    the packet cache and the aggressive NSEC cache are dumped. To
+    select specific caches specify one or more *TYPE*s, separated
+    by spaces. The value of *TYPE* can be r, n, p or a.
 
 dump-dot-probe-map *FILENAME*
     Dump the contents of the DoT probe map to the *FILENAME* mentioned.
@@ -179,7 +181,10 @@ hash-password [*WORK-FACTOR*]
 
 help
     Shows a list of supported commands understood by the running
-    :program:`pdns_recursor`
+    :program:`pdns_recursor`.
+
+list-dnssec-algos
+    List supported (and potentially disabled) DNSSEC algorithms.
 
 ping
     Check if server is alive.
@@ -206,7 +211,11 @@ reload-lua-config [*FILENAME*]
     executed, any settings changed at runtime that are not modified in this
     file, will still be active. The effects of reloading do not always take
     place immediately, as some subsystems reload and replace configuration
-    in an asynchronous way.
+    in an asynchronous way. If YAML settings are used this command will
+    reload the runtime settable parts of the YAML settings.
+
+reload-yaml
+    Reload the runtime settable parts of the YAML settings.
 
 reload-zones
     Reload authoritative and forward zones. Retains current configuration in
@@ -217,12 +226,18 @@ set-carbon-server *CARBON SERVER* [*CARBON OURNAME*]
     not empty, also set the carbon-ourname setting to *CARBON OURNAME*.
 
 set-dnssec-log-bogus *SETTING*
-    Set dnssec-log-bogus setting to *SETTING*. Set to 'on' or 'yes' to log
-    DNSSEC validation failures and to 'no' or 'off' to disable logging these
+    Set dnssec-log-bogus setting to *SETTING*. Set to ``on`` or ``yes`` to log
+    DNSSEC validation failures and to ``no`` or ``off`` to disable logging these
     failures.
 
 set-ecs-minimum-ttl *NUM*
     Set ecs-minimum-ttl-override to *NUM*.
+
+set-max-aggr-nsec-cache-size *NUM*
+    Change the maximum number of entries in the NSEC aggressive cache. If the
+    cache is disabled by setting its size to 0 in the config, the cache size
+    cannot be set by this command. Setting the size to 0 by this command still
+    keeps the cache, but makes it mostly ineffective as it is emptied periodically.
 
 set-max-cache-entries *NUM*
     Change the maximum number of entries in the DNS cache.  If reduced, the
@@ -238,7 +253,11 @@ set-minimum-ttl *NUM*
     Set minimum-ttl-override to *NUM*.
 
 set-event-trace-enabled *NUM*
-    Set logging of event trace messages, 0 = disabled, 1 = protobuf, 2 = log file, 3 = both.
+    Set logging of event trace messages, ``0`` = disabled, ``1`` = protobuf,
+    ``2`` = log file, ``3`` = protobuf and log file.
+
+show-yaml [*FILE*]
+    Show Yaml representation of old-style config.
 
 top-queries
     Shows the top-20 queries. Statistics are over the last
@@ -316,14 +335,14 @@ unload-lua-script
     Unloads Lua script if one was loaded.
 
 version
-    Report running version.
+    Report the version of the running Recursor.
 
 wipe-cache *DOMAIN* [*DOMAIN*] [...]
     Wipe entries for *DOMAIN* (exact name match) from the cache. This is useful
     if, for example, an important server has a new IP address, but the TTL has
     not yet expired. Multiple domain names can be passed.
-    *DOMAIN* can be suffixed with a '$'. to delete the whole tree from the
-    cache. i.e. 'powerdns.com$' will remove all cached entries under and
+    *DOMAIN* can be suffixed with a ``$``. to delete the whole tree from the
+    cache. i.e. ``powerdns.com$`` will remove all cached entries under and
     including the powerdns.com name.
 
     **Note**: this command also wipes the negative cache.

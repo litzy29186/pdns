@@ -1,11 +1,13 @@
+import errno
 import os
 import socket
 import struct
 import sys
 import threading
+import time
 import dns
 import dnstap_pb2
-from nose import SkipTest
+from unittest import SkipTest
 from recursortests import RecursorTest
 
 FSTRM_CONTROL_ACCEPT = 0x01
@@ -186,7 +188,7 @@ class TestRecursorDNSTap(RecursorTest):
                 fstrm_handle_bidir_connection(conn, lambda data: \
                 param.queue.put(data, True, timeout=2.0))
             except socket.error as e:
-                if e.errno == 9:
+                if e.errno in (errno.EBADF, errno.EPIPE):
                     break
                 sys.stderr.write("Unexpected socket error %s\n" % str(e))
                 sys.exit(1)
@@ -213,10 +215,10 @@ class TestRecursorDNSTap(RecursorTest):
             try:
                 (conn, addr) = sock.accept()
                 listener = threading.Thread(name='DNSTap Worker', target=cls.FrameStreamUnixListener, args=[conn, param])
-                listener.setDaemon(True)
+                listener.daemon = True
                 listener.start()
             except socket.error as e:
-                if e.errno != 9:
+                if e.errno != errno.EBADF:
                     sys.stderr.write("Socket error on accept: %s\n" % str(e))
                 else:
                     break
@@ -232,7 +234,7 @@ class TestRecursorDNSTap(RecursorTest):
         cls.startResponders()
 
         listener = threading.Thread(name='DNSTap Listener', target=cls.FrameStreamUnixListenerMain, args=[DNSTapServerParameters])
-        listener.setDaemon(True)
+        listener.daemon = True
         listener.start()
 
         confdir = os.path.join('configs', cls._confdir)
@@ -274,6 +276,16 @@ cname 3600 IN CNAME a.example.
         for listerner in DNSTapListeners:
             listerner.close()
 
+    def getFirstDnstap(self):
+        try:
+            data = DNSTapServerParameters.queue.get(True, timeout=2.0)
+        except:
+            data = False
+        self.assertTrue(data)
+        dnstap = dnstap_pb2.Dnstap()
+        dnstap.ParseFromString(data)
+        return dnstap
+
 class DNSTapDefaultTest(TestRecursorDNSTap):
     """
     This test makes sure that we correctly export outgoing queries over DNSTap.
@@ -288,16 +300,6 @@ auth-zones=example=configs/%s/example.zone""" % _confdir
 dnstapFrameStreamServer({"%s"})
     """ % DNSTapServerParameters.path
 
-    def getFirstDnstap(self):
-        try:
-            data = DNSTapServerParameters.queue.get(True, timeout=2.0)
-        except:
-            data = False
-        self.assertTrue(data)
-        dnstap = dnstap_pb2.Dnstap()
-        dnstap.ParseFromString(data)
-        return dnstap
-
     def testA(self):
         name = 'www.example.org.'
         query = dns.message.make_query(name, 'A', want_dnssec=True)
@@ -311,6 +313,8 @@ dnstapFrameStreamServer({"%s"})
         checkDnstapQuery(self, dnstap, dnstap_pb2.UDP, '127.0.0.1', '127.0.0.8')
         # We don't expect a response
         checkDnstapNoExtra(self, dnstap)
+        # We don't expect anything more, but we'll sleep anyway to avoid a LeakSanitizer race
+        time.sleep(1)
 
 class DNSTapLogNoQueriesTest(TestRecursorDNSTap):
 
@@ -328,7 +332,8 @@ dnstapFrameStreamServer({"%s"}, {logQueries=false})
         res = self.sendUDPQuery(query)
         self.assertNotEqual(res, None)
 
-        # We don't expect anything
+        # We don't expect anything more
+        time.sleep(1)
         self.assertTrue(DNSTapServerParameters.queue.empty())
 
 class DNSTapLogNODTest(TestRecursorDNSTap):
@@ -338,7 +343,7 @@ class DNSTapLogNODTest(TestRecursorDNSTap):
     that the recursor at least connects to the DNSTap server.
     """
 
-    _confdir = 'DNSTapLogNODQueries'
+    _confdir = 'DNSTapLogNOD'
     _config_template = """
 new-domain-tracking=yes
 new-domain-history-dir=configs/%s/nod
@@ -356,18 +361,8 @@ dnstapNODFrameStreamServer({"%s"})
             cls.createConfigDir(path)
         super(DNSTapLogNODTest, cls).generateRecursorConfig(confdir)
 
-    def getFirstDnstap(self):
-        try:
-            data = DNSTapServerParameters.queue.get(True, timeout=2.0)
-        except:
-            data = False
-        self.assertTrue(data)
-        dnstap = dnstap_pb2.Dnstap()
-        dnstap.ParseFromString(data)
-        return dnstap
-
     def testA(self):
-        name = 'www.example.org.'
+        name = 'types.example.'
         query = dns.message.make_query(name, 'A', want_dnssec=True)
         query.flags |= dns.flags.RD
         res = self.sendUDPQuery(query)
@@ -379,10 +374,13 @@ dnstapNODFrameStreamServer({"%s"})
         checkDnstapNOD(self, dnstap, dnstap_pb2.UDP, '127.0.0.1', '127.0.0.1', 5300, name)
         # We don't expect a response
         checkDnstapNoExtra(self, dnstap)
+        # We don't expect anything more
+        time.sleep(1)
+        self.assertTrue(DNSTapServerParameters.queue.empty())
 
 class DNSTapLogUDRTest(TestRecursorDNSTap):
 
-    _confdir = 'DNSTapLogUDRResponses'
+    _confdir = 'DNSTapLogUDR'
     _config_template = """
 new-domain-tracking=yes
 new-domain-history-dir=configs/%s/nod
@@ -400,16 +398,6 @@ dnstapNODFrameStreamServer({"%s"}, {logNODs=false, logUDRs=true})
             cls.createConfigDir(path)
         super(DNSTapLogUDRTest, cls).generateRecursorConfig(confdir)
 
-    def getFirstDnstap(self):
-        try:
-            data = DNSTapServerParameters.queue.get(True, timeout=2.0)
-        except:
-            data = False
-        self.assertTrue(data)
-        dnstap = dnstap_pb2.Dnstap()
-        dnstap.ParseFromString(data)
-        return dnstap
-
     def testA(self):
         name = 'types.example.'
         query = dns.message.make_query(name, 'A', want_dnssec=True)
@@ -423,10 +411,13 @@ dnstapNODFrameStreamServer({"%s"}, {logNODs=false, logUDRs=true})
         checkDnstapUDR(self, dnstap, dnstap_pb2.UDP, '127.0.0.1', '127.0.0.1', 5300, name)
         # We don't expect a rpasesponse
         checkDnstapNoExtra(self, dnstap)
+        # We don't expect anything more
+        time.sleep(1)
+        self.assertTrue(DNSTapServerParameters.queue.empty())
 
 class DNSTapLogNODUDRTest(TestRecursorDNSTap):
 
-    _confdir = 'DNSTapLogNODUDRs'
+    _confdir = 'DNSTapLogNODUDR'
     _config_template = """
 new-domain-tracking=yes
 new-domain-history-dir=configs/%s/nod
@@ -444,16 +435,6 @@ dnstapNODFrameStreamServer({"%s"}, {logNODs=true, logUDRs=true})
             cls.createConfigDir(path)
         super(DNSTapLogNODUDRTest, cls).generateRecursorConfig(confdir)
 
-    def getFirstDnstap(self):
-        try:
-            data = DNSTapServerParameters.queue.get(True, timeout=2.0)
-        except:
-            data = False
-        self.assertTrue(data)
-        dnstap = dnstap_pb2.Dnstap()
-        dnstap.ParseFromString(data)
-        return dnstap
-
     def testA(self):
         name = 'types.example.'
         query = dns.message.make_query(name, 'A', want_dnssec=True)
@@ -468,3 +449,6 @@ dnstapNODFrameStreamServer({"%s"}, {logNODs=true, logUDRs=true})
         checkDnstapNOD(self, dnstap, dnstap_pb2.UDP, '127.0.0.1', '127.0.0.1', 5300, name)
 
         checkDnstapNoExtra(self, dnstap)
+        # We don't expect anything more
+        time.sleep(1)
+        self.assertTrue(DNSTapServerParameters.queue.empty())

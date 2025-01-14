@@ -1,3 +1,4 @@
+#include <openssl/evp.h>
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -18,6 +19,7 @@
 #include <openssl/ec.h>
 #endif
 
+#include "misc.hh"
 #include "pkcs11signers.hh"
 /* TODO
 
@@ -42,8 +44,8 @@ in it. you need to use softhsm tools to manage this all.
 static CK_FUNCTION_LIST** p11_modules;
 #endif
 
-#define ECDSA256_PARAMS "\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07"
-#define ECDSA384_PARAMS "\x06\x05\x2b\x81\x04\x00\x22"
+static constexpr const char* ECDSA256_PARAMS{"\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07"};
+static constexpr const char* ECDSA384_PARAMS{"\x06\x05\x2b\x81\x04\x00\x22"};
 
 // map for signing algorithms
 static std::map<unsigned int,CK_MECHANISM_TYPE> dnssec2smech = boost::assign::map_list_of
@@ -71,14 +73,14 @@ static std::map<unsigned int,CK_MECHANISM_TYPE> dnssec2cmech = boost::assign::ma
 (13, CKM_ECDSA_KEY_PAIR_GEN)
 (14, CKM_ECDSA_KEY_PAIR_GEN);
 
-typedef enum { Attribute_Byte, Attribute_Long, Attribute_String } CkaValueType;
+using CkaValueType = enum { Attribute_Byte, Attribute_Long, Attribute_String };
 
 // Attribute handling
 class P11KitAttribute {
 private:
   CK_ATTRIBUTE_TYPE type;
-  CK_BYTE ckByte;
-  CK_ULONG ckLong;
+  CK_BYTE ckByte{0};
+  CK_ULONG ckLong{0};
   std::string ckString;
   CkaValueType ckType;
   std::unique_ptr<unsigned char[]> buffer;
@@ -112,19 +114,19 @@ public:
     setLong(value);
   }
 
-  CkaValueType valueType() const {
+  [[nodiscard]] CkaValueType valueType() const {
     return ckType;
   }
 
-  const std::string &str() const {
+  [[nodiscard]] const std::string &str() const {
     return ckString;
   };
 
-  unsigned char byte() const {
+  [[nodiscard]] unsigned char byte() const {
     return ckByte;
   }
 
-  unsigned long ulong() const {
+  [[nodiscard]] unsigned long ulong() const {
     return ckLong;
   }
 
@@ -211,11 +213,12 @@ public:
 
 class Pkcs11Slot {
   private:
-    bool d_logged_in;
+    bool d_logged_in{};
     CK_FUNCTION_LIST* d_functions; // module functions
     CK_SESSION_HANDLE d_session;
     CK_SLOT_ID d_slot;
-    CK_RV d_err;
+    CK_RV d_err{};
+    std::string d_pin;
 
     void logError(const std::string& operation) const {
       if (d_err) {
@@ -225,12 +228,12 @@ class Pkcs11Slot {
     }
 
   public:
-  Pkcs11Slot(CK_FUNCTION_LIST* functions, const CK_SLOT_ID& slot) :
-    d_logged_in(false),
-    d_functions(functions),
-    d_slot(slot),
-    d_err(0)
-  {
+    Pkcs11Slot(CK_FUNCTION_LIST* functions, const CK_SLOT_ID& slot) :
+      d_logged_in(false),
+      d_functions(functions),
+      d_slot(slot),
+      d_err(0)
+    {
       CK_TOKEN_INFO tokenInfo;
 
       if ((d_err = d_functions->C_OpenSession(this->d_slot, CKF_SERIAL_SESSION|CKF_RW_SESSION, 0, 0, &(this->d_session)))) {
@@ -246,20 +249,26 @@ class Pkcs11Slot {
       }
     }
 
-    bool Login(const std::string& pin) {
-      if (d_logged_in) return true;
+    bool Login(const std::string& pin, CK_USER_TYPE userType=CKU_USER) {
+      if (userType == CKU_USER && d_logged_in) {
+        return true;
+      }
 
       auto uPin = std::make_unique<unsigned char[]>(pin.size());
       memcpy(uPin.get(), pin.c_str(), pin.size());
-      d_err = d_functions->C_Login(this->d_session, CKU_USER, uPin.get(), pin.size());
-      memset(uPin.get(), 0, pin.size());
+      d_err = d_functions->C_Login(this->d_session, userType, uPin.get(), pin.size());
       logError("C_Login");
 
-      if (d_err == 0) {
+      if (d_err == 0 && userType == CKU_USER) {
         d_logged_in = true;
+        d_pin = pin;
       }
 
       return d_logged_in;
+    }
+
+    bool Relogin() {
+      return Login(d_pin, CKU_CONTEXT_SPECIFIC);
     }
 
     bool LoggedIn() const { return d_logged_in; }
@@ -276,9 +285,10 @@ class Pkcs11Token {
   private:
     std::shared_ptr<LockGuarded<Pkcs11Slot>> d_slot;
 
-    CK_OBJECT_HANDLE d_public_key;
-    CK_OBJECT_HANDLE d_private_key;
-    CK_KEY_TYPE d_key_type;
+    CK_OBJECT_HANDLE d_public_key{0};
+    CK_OBJECT_HANDLE d_private_key{0};
+    CK_KEY_TYPE d_key_type{0};
+    bool d_always_auth{false};
 
     CK_ULONG d_bits;
     std::string d_exponent;
@@ -299,24 +309,43 @@ class Pkcs11Token {
       }
     }
 
-    unsigned int ecparam2bits(const std::string& obj) const {
+    [[nodiscard]] unsigned int ecparam2bits(const std::string& obj) const {
       // if we can use some library to parse the EC parameters, better use it.
       // otherwise fall back to using hardcoded primev256 and secp384r1
 #ifdef HAVE_LIBCRYPTO_ECDSA
+#if OPENSSL_VERSION_MAJOR >= 3
+      using Key = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+#else
+      using Key = std::unique_ptr<EC_KEY, decltype(&EC_KEY_free)>;
+      using BigNum = std::unique_ptr<BIGNUM, decltype(&BN_clear_free)>;
+#endif
+
       unsigned int bits = 0;
-      const unsigned char *in = reinterpret_cast<const unsigned char*>(obj.c_str());
-      auto order = std::unique_ptr<BIGNUM, void(*)(BIGNUM*)>(BN_new(), BN_clear_free);
-      auto tempKey = d2i_ECParameters(nullptr, &in, obj.size());
-      if (tempKey != nullptr) {
-        auto key = std::unique_ptr<EC_KEY, void(*)(EC_KEY*)>(tempKey, EC_KEY_free);
-        tempKey = nullptr;
-        if (EC_GROUP_get_order(EC_KEY_get0_group(key.get()), order.get(), nullptr) == 1) {
-          bits = BN_num_bits(order.get());
-        }
+
+      // NOLINTNEXTLINE(*-cast): Using OpenSSL C APIs.
+      const auto* objCStr = reinterpret_cast<const unsigned char*>(obj.c_str());
+#if OPENSSL_VERSION_MAJOR >= 3
+      auto key = Key(d2i_KeyParams(EVP_PKEY_EC, nullptr, &objCStr, static_cast<long>(obj.size())), EVP_PKEY_free);
+#else
+      auto key = Key(d2i_ECParameters(nullptr, &objCStr, static_cast<long>(obj.size())), EC_KEY_free);
+#endif
+      if (key == nullptr) {
+        throw pdns::OpenSSL::error("PKCS11", "Cannot parse EC parameters from DER");
       }
 
-      if (bits == 0)
+#if OPENSSL_VERSION_MAJOR >= 3
+      bits = EVP_PKEY_get_bits(key.get());
+#else
+      const auto* group = EC_KEY_get0_group(key.get());
+      auto order = BigNum(BN_new(), BN_clear_free);
+      if (EC_GROUP_get_order(group, order.get(), nullptr) == 1) {
+        bits = BN_num_bits(order.get());
+      }
+#endif
+
+      if (bits == 0) {
         throw PDNSException("Unsupported EC key");
+      }
 
       return bits;
 #else
@@ -350,61 +379,64 @@ class Pkcs11Token {
       auto slot = d_slot->lock();
       std::vector<P11KitAttribute> attr;
       std::vector<CK_OBJECT_HANDLE> key;
-      attr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY));
-//      attr.push_back(P11KitAttribute(CKA_SIGN, (char)CK_TRUE));
-      attr.push_back(P11KitAttribute(CKA_LABEL, d_label));
+      attr.emplace_back(CKA_CLASS, (unsigned long)CKO_PRIVATE_KEY);
+      attr.emplace_back(CKA_LABEL, d_label);
       FindObjects2(*slot, attr, key, 1);
       if (key.size() == 0) {
-        g_log<<Logger::Warning<<"Cannot load PCKS#11 private key "<<d_label<<std::endl;;
+        g_log<<Logger::Warning<<"Cannot load PKCS#11 private key "<<d_label<<std::endl;;
         return;
       }
       d_private_key = key[0];
       attr.clear();
-      attr.push_back(P11KitAttribute(CKA_CLASS, (unsigned long)CKO_PUBLIC_KEY));
-//      attr.push_back(P11KitAttribute(CKA_VERIFY, (char)CK_TRUE));
-      attr.push_back(P11KitAttribute(CKA_LABEL, d_pub_label));
+      attr.emplace_back(CKA_ALWAYS_AUTHENTICATE, '\0');
+      if (GetAttributeValue2(*slot, d_private_key, attr)==0) {
+        d_always_auth = attr[0].byte() != 0;
+      }
+      attr.clear();
+      attr.emplace_back(CKA_CLASS, (unsigned long)CKO_PUBLIC_KEY);
+      attr.emplace_back(CKA_LABEL, d_pub_label);
       FindObjects2(*slot, attr, key, 1);
       if (key.size() == 0) {
-        g_log<<Logger::Warning<<"Cannot load PCKS#11 public key "<<d_pub_label<<std::endl;
+        g_log<<Logger::Warning<<"Cannot load PKCS#11 public key "<<d_pub_label<<std::endl;
         return;
       }
       d_public_key = key[0];
 
       attr.clear();
-      attr.push_back(P11KitAttribute(CKA_KEY_TYPE, 0UL));
+      attr.emplace_back(CKA_KEY_TYPE, 0UL);
 
       if (GetAttributeValue2(*slot, d_public_key, attr)==0) {
         d_key_type = attr[0].ulong();
         if (d_key_type == CKK_RSA) {
           attr.clear();
-          attr.push_back(P11KitAttribute(CKA_MODULUS, ""));
-          attr.push_back(P11KitAttribute(CKA_PUBLIC_EXPONENT, ""));
-          attr.push_back(P11KitAttribute(CKA_MODULUS_BITS, 0UL));
+          attr.emplace_back(CKA_MODULUS, "");
+          attr.emplace_back(CKA_PUBLIC_EXPONENT, "");
+          attr.emplace_back(CKA_MODULUS_BITS, 0UL);
 
           if (!GetAttributeValue2(*slot, d_public_key, attr)) {
             d_modulus = attr[0].str();
             d_exponent = attr[1].str();
             d_bits = attr[2].ulong();
           } else {
-            throw PDNSException("Cannot load attributes for PCKS#11 public key " + d_pub_label);
+            throw PDNSException("Cannot load attributes for PKCS#11 public key " + d_pub_label);
           }
         } else if (d_key_type == CKK_EC || d_key_type == CKK_ECDSA) {
           attr.clear();
-          attr.push_back(P11KitAttribute(CKA_ECDSA_PARAMS, ""));
-          attr.push_back(P11KitAttribute(CKA_EC_POINT, ""));
+          attr.emplace_back(CKA_ECDSA_PARAMS, "");
+          attr.emplace_back(CKA_EC_POINT, "");
           if (!GetAttributeValue2(*slot, d_public_key, attr)) {
             d_ecdsa_params = attr[0].str();
             d_bits = ecparam2bits(d_ecdsa_params);
             if (attr[1].str().length() != (d_bits*2/8 + 3)) throw PDNSException("EC Point data invalid");
             d_ec_point = attr[1].str().substr(3);
           } else {
-            throw PDNSException("Cannot load attributes for PCKS#11 public key " + d_pub_label);
+            throw PDNSException("Cannot load attributes for PKCS#11 public key " + d_pub_label);
           }
         } else {
-          throw PDNSException("Cannot determine type for PCKS#11 public key " + d_pub_label);
+          throw PDNSException("Cannot determine type for PKCS#11 public key " + d_pub_label);
         }
       } else {
-        throw PDNSException("Cannot load attributes for PCKS#11 public key " + d_pub_label);
+        throw PDNSException("Cannot load attributes for PKCS#11 public key " + d_pub_label);
       }
 
       d_loaded = true;
@@ -416,7 +448,7 @@ class Pkcs11Token {
 
       size_t k;
       auto pubAttr = std::make_unique<CK_ATTRIBUTE[]>(pubAttributes.size());
-      auto privAttr = std::make_unique<CK_ATTRIBUTE[]>(pubAttributes.size());
+      auto privAttr = std::make_unique<CK_ATTRIBUTE[]>(privAttributes.size());
 
       k = 0;
       for(P11KitAttribute& attribute :  pubAttributes) {
@@ -444,8 +476,12 @@ class Pkcs11Token {
       CK_ULONG buflen = sizeof buffer; // should be enough for most signatures.
       auto slot = d_slot->lock();
 
-      // perform signature
       if ((d_err = slot->f()->C_SignInit(slot->Session(), mechanism, d_private_key))) { logError("C_SignInit"); return d_err; }
+      // check if we need to relogin
+      if (d_always_auth) {
+         slot->Relogin();
+      }
+      // perform signature
       d_err = slot->f()->C_Sign(slot->Session(), (unsigned char*)data.c_str(), data.size(), buffer, &buflen);
 
       if (!d_err) {
@@ -461,6 +497,11 @@ class Pkcs11Token {
       auto slot = d_slot->lock();
 
       if ((d_err = slot->f()->C_VerifyInit(slot->Session(), mechanism, d_public_key))) { logError("C_VerifyInit"); return d_err; }
+      // check if we need to relogin
+      if (d_always_auth) {
+         slot->Relogin();
+      }
+
       d_err = slot->f()->C_Verify(slot->Session(), (unsigned char*)data.c_str(), data.size(), (unsigned char*)signature.c_str(), signature.size());
       logError("C_Verify");
       return d_err;
@@ -739,8 +780,7 @@ Pkcs11Token::Pkcs11Token(const std::shared_ptr<LockGuarded<Pkcs11Slot>>& slot, c
   if (this->d_slot->lock()->LoggedIn()) LoadAttributes();
 }
 
-Pkcs11Token::~Pkcs11Token() {
-}
+Pkcs11Token::~Pkcs11Token() = default;
 
 bool PKCS11ModuleSlotLogin(const std::string& module, const string& tokenId, const std::string& pin)
 {
@@ -750,7 +790,7 @@ bool PKCS11ModuleSlotLogin(const std::string& module, const string& tokenId, con
 }
 
 PKCS11DNSCryptoKeyEngine::PKCS11DNSCryptoKeyEngine(unsigned int algorithm): DNSCryptoKeyEngine(algorithm) {}
-PKCS11DNSCryptoKeyEngine::~PKCS11DNSCryptoKeyEngine() {}
+PKCS11DNSCryptoKeyEngine::~PKCS11DNSCryptoKeyEngine() = default;
 PKCS11DNSCryptoKeyEngine::PKCS11DNSCryptoKeyEngine(const PKCS11DNSCryptoKeyEngine& orig) : DNSCryptoKeyEngine(orig.d_algorithm) {}
 
 void PKCS11DNSCryptoKeyEngine::create(unsigned int bits) {
@@ -868,19 +908,19 @@ std::string PKCS11DNSCryptoKeyEngine::hash(const std::string& msg) const {
     // FINE! I'll do this myself, then, shall I?
     switch(d_algorithm) {
     case 5: {
-      return pdns_sha1sum(msg);
+      return pdns::sha1sum(msg);
     }
     case 8: {
-      return pdns_sha256sum(msg);
+      return pdns::sha256sum(msg);
     }
     case 10: {
-      return pdns_sha512sum(msg);
+      return pdns::sha512sum(msg);
     }
     case 13: {
-      return pdns_sha256sum(msg);
+      return pdns::sha256sum(msg);
     }
     case 14: {
-      return pdns_sha384sum(msg);
+      return pdns::sha384sum(msg);
     }
     };
   };
@@ -990,7 +1030,7 @@ namespace {
     };
     ~LoaderStruct() {
 #ifdef HAVE_P11KIT1_V2
-      p11_kit_modules_release(p11_modules);
+      p11_kit_modules_finalize_and_release(p11_modules);
 #else
       p11_kit_finalize_registered();
 #endif

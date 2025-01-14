@@ -19,7 +19,14 @@ LT_INIT([disable-static])
 CFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter -fvisibility=hidden $CFLAGS"
 CXXFLAGS="-g -O3 -Wall -Wextra -Wshadow -Wno-unused-parameter -Wmissing-declarations -Wredundant-decls -fvisibility=hidden $CXXFLAGS"
 
+AC_SUBST([pdns_configure_args], ["$ac_configure_args"])
+AC_DEFINE_UNQUOTED([DNSDIST_CONFIG_ARGS],
+  ["$pdns_configure_args"],
+  [pdns configure arguments]
+)
+
 PDNS_WITH_LIBSODIUM
+PDNS_WITH_QUICHE
 PDNS_CHECK_DNSTAP([auto])
 PDNS_CHECK_RAGEL([dnslabeltext.cc], [www.dnsdist.org])
 PDNS_WITH_LIBEDIT
@@ -32,12 +39,14 @@ PDNS_CHECK_PTHREAD_NP
 PDNS_CHECK_SECURE_MEMSET
 AC_FUNC_STRERROR_R
 
-BOOST_REQUIRE([1.42])
+BOOST_REQUIRE([1.54])
 
 PDNS_ENABLE_UNIT_TESTS
+PDNS_ENABLE_FUZZ_TARGETS
 PDNS_WITH_RE2
 DNSDIST_ENABLE_DNSCRYPT
 PDNS_WITH_EBPF
+PDNS_WITH_XSK
 PDNS_WITH_NET_SNMP
 PDNS_WITH_LIBCAP
 
@@ -48,11 +57,15 @@ PDNS_WITH_SERVICE_USER([dnsdist])
 
 dnl the *_r functions are in posix so we can use them unconditionally, but the ext/yahttp code is
 dnl using the defines.
-AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r getrandom])
+AC_CHECK_FUNCS_ONCE([localtime_r gmtime_r])
+AC_CHECK_FUNCS_ONCE([getrandom getentropy arc4random arc4random_uniform arc4random_buf])
 AC_SUBST([YAHTTP_CFLAGS], ['-I$(top_srcdir)/ext/yahttp'])
 AC_SUBST([YAHTTP_LIBS], ['$(top_builddir)/ext/yahttp/yahttp/libyahttp.la'])
 AC_SUBST([IPCRYPT_CFLAGS], ['-I$(top_srcdir)/ext/ipcrypt'])
 AC_SUBST([IPCRYPT_LIBS], ['$(top_builddir)/ext/ipcrypt/libipcrypt.la'])
+AC_SUBST([ARC4RANDOM_LIBS], ['$(top_builddir)/ext/arc4random/libarc4random.la'])
+
+AC_CHECK_HEADERS([sys/random.h])
 
 PDNS_WITH_LUA([mandatory])
 AS_IF([test "x$LUAPC" = "xluajit"], [
@@ -62,10 +75,12 @@ AS_IF([test "x$LUAPC" = "xluajit"], [
 ])
 PDNS_CHECK_LUA_HPP
 
+AM_CONDITIONAL([HAVE_CDB], [false])
 AM_CONDITIONAL([HAVE_GNUTLS], [false])
+AM_CONDITIONAL([HAVE_LIBH2OEVLOOP], [false])
 AM_CONDITIONAL([HAVE_LIBSSL], [false])
 AM_CONDITIONAL([HAVE_LMDB], [false])
-AM_CONDITIONAL([HAVE_CDB], [false])
+AM_CONDITIONAL([HAVE_NGHTTP2], [false])
 
 PDNS_CHECK_LIBCRYPTO
 
@@ -73,31 +88,49 @@ DNSDIST_ENABLE_TLS_PROVIDERS
 
 PDNS_ENABLE_DNS_OVER_TLS
 DNSDIST_ENABLE_DNS_OVER_HTTPS
+DNSDIST_ENABLE_DNS_OVER_QUIC
+DNSDIST_ENABLE_DNS_OVER_HTTP3
 
-AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xno"], [
+AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xno" -o "x$enable_dns_over_quic" != "xno" ], [
   PDNS_WITH_LIBSSL
+  AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xno"], [
+    PDNS_WITH_GNUTLS
+  ])
 ])
 
 AS_IF([test "x$enable_dns_over_tls" != "xno"], [
-  PDNS_WITH_GNUTLS
-
   AS_IF([test "x$HAVE_GNUTLS" != "x1" -a "x$HAVE_LIBSSL" != "x1"], [
     AC_MSG_ERROR([DNS over TLS support requested but neither GnuTLS nor OpenSSL are available])
   ])
 ])
 
-PDNS_CHECK_LIBH2OEVLOOP
 AS_IF([test "x$enable_dns_over_https" != "xno"], [
-  AS_IF([test "x$HAVE_LIBH2OEVLOOP" != "x1"], [
-    AC_MSG_ERROR([DNS over HTTPS support requested but libh2o-evloop was not found])
+  PDNS_WITH_NGHTTP2
+  PDNS_WITH_LIBH2OEVLOOP
+
+  AS_IF([test "x$HAVE_LIBH2OEVLOOP" != "x1" -a "x$HAVE_NGHTTP2" != "x1" ], [
+    AC_MSG_ERROR([DNS over HTTPS support requested but neither libh2o-evloop nor nghttp2 was not found])
   ])
 
-  AS_IF([test "x$HAVE_LIBSSL" != "x1"], [
-    AC_MSG_ERROR([DNS over HTTPS support requested but OpenSSL was not found])
+  AS_IF([test "x$HAVE_GNUTLS" != "x1" -a "x$HAVE_LIBSSL" != "x1"], [
+    AC_MSG_ERROR([DNS over HTTPS support requested but neither GnuTLS nor OpenSSL are available])
   ])
 ])
 
-PDNS_WITH_NGHTTP2
+AS_IF([test "x$enable_dns_over_quic" != "xno"], [
+  AS_IF([test "x$HAVE_QUICHE" != "x1"], [
+    AC_MSG_ERROR([DNS over QUIC support requested but quiche was not found])
+  ])
+  AS_IF([test "x$HAVE_LIBSSL" != "x1"], [
+    AC_MSG_ERROR([DNS over QUIC support requested but OpenSSL is not available])
+  ])
+])
+
+AS_IF([test "x$enable_dns_over_http3" != "xno"], [
+  AS_IF([test "x$HAVE_QUICHE" != "x1"], [
+    AC_MSG_ERROR([DNS over HTTP/3 support requested but quiche was not found])
+  ])
+])
 
 DNSDIST_WITH_CDB
 PDNS_CHECK_LMDB
@@ -125,6 +158,7 @@ PDNS_INIT_AUTO_VARS
 
 PDNS_ENABLE_SANITIZERS
 PDNS_ENABLE_LTO
+PDNS_ENABLE_COVERAGE
 
 PDNS_CHECK_PYTHON_VENV
 
@@ -156,6 +190,7 @@ AS_IF([test "x$PACKAGEVERSION" != "x"],
 )
 
 AC_CONFIG_FILES([Makefile
+        ext/arc4random/Makefile
         ext/yahttp/Makefile
         ext/yahttp/yahttp/Makefile
         ext/ipcrypt/Makefile])
@@ -190,6 +225,10 @@ AS_IF([test "x$systemd" != "xn"],
   [AC_MSG_NOTICE([systemd: yes])],
   [AC_MSG_NOTICE([systemd: no])]
 )
+AS_IF([test x"$BPF_LIBS" != "x" -a x"$XDP_LIBS" != "x"],
+  [AC_MSG_NOTICE([AF_XDP/XSK: yes])],
+  [AC_MSG_NOTICE([AF_XDP/XSK: no])]
+)
 AS_IF([test "x$HAVE_IPCIPHER" = "x1"],
   [AC_MSG_NOTICE([ipcipher: yes])],
   [AC_MSG_NOTICE([ipcipher: no])]
@@ -210,6 +249,10 @@ AS_IF([test "x$FSTRM_LIBS" != "x"],
   [AC_MSG_NOTICE([dnstap: yes])],
   [AC_MSG_NOTICE([dnstap: no])]
 )
+AS_IF([test "x$QUICHE_LIBS" != "x"],
+  [AC_MSG_NOTICE([quiche: yes])],
+  [AC_MSG_NOTICE([quiche: no])]
+)
 AS_IF([test "x$RE2_LIBS" != "x"],
   [AC_MSG_NOTICE([re2: yes])],
   [AC_MSG_NOTICE([re2: no])]
@@ -226,6 +269,14 @@ AS_IF([test "x$enable_dns_over_https" != "xno"],
   [AC_MSG_NOTICE([DNS over HTTPS (DoH): yes])],
   [AC_MSG_NOTICE([DNS over HTTPS (DoH): no])]
 )
+AS_IF([test "x$enable_dns_over_quic" != "xno"],
+  [AC_MSG_NOTICE([DNS over QUIC (DoQ): yes])],
+  [AC_MSG_NOTICE([DNS over QUIC (DoQ): no])]
+)
+AS_IF([test "x$enable_dns_over_http3" != "xno"],
+  [AC_MSG_NOTICE([DNS over HTTP/3 (DoH3): yes])],
+  [AC_MSG_NOTICE([DNS over HTTP/3 (DoH3): no])]
+)
 AS_IF([test "x$enable_dns_over_tls" != "xno"], [
   AS_IF([test "x$GNUTLS_LIBS" != "x"],
     [AC_MSG_NOTICE([GnuTLS: yes])],
@@ -237,6 +288,10 @@ AS_IF([test "x$enable_dns_over_tls" != "xno" -o "x$enable_dns_over_https" != "xn
     [AC_MSG_NOTICE([OpenSSL: yes])],
     [AC_MSG_NOTICE([OpenSSL: no])]
   )]
+)
+AS_IF([test "x$LIBH2OEVLOOP_LIBS" != "x"],
+  [AC_MSG_NOTICE([h2o-evloop: yes])],
+  [AC_MSG_NOTICE([h2o-evloop: no])]
 )
 AS_IF([test "x$NGHTTP2_LIBS" != "x"],
   [AC_MSG_NOTICE([nghttp2: yes])],

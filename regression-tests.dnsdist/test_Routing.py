@@ -3,20 +3,20 @@ import base64
 import threading
 import time
 import dns
-from dnsdisttests import DNSDistTest
+from dnsdisttests import DNSDistTest, pickAvailablePort
 
 class TestRoutingPoolRouting(DNSDistTest):
 
     _config_template = """
     newServer{address="127.0.0.1:%s", pool="real"}
-    addAction(makeRule("poolaction.routing.tests.powerdns.com"), PoolAction("real"))
+    addAction(SuffixMatchNodeRule("poolaction.routing.tests.powerdns.com"), PoolAction("real"))
     -- by default PoolAction stops the processing so the second rule should not be executed
-    addAction(makeRule("poolaction.routing.tests.powerdns.com"), PoolAction("not-real"))
+    addAction(SuffixMatchNodeRule("poolaction.routing.tests.powerdns.com"), PoolAction("not-real"))
 
     -- this time we configure PoolAction to not stop the processing
-    addAction(makeRule("poolaction-nostop.routing.tests.powerdns.com"), PoolAction("no-real", false))
+    addAction(SuffixMatchNodeRule("poolaction-nostop.routing.tests.powerdns.com"), PoolAction("no-real", false))
     -- so the second rule should be executed
-    addAction(makeRule("poolaction-nostop.routing.tests.powerdns.com"), PoolAction("real"))
+    addAction(SuffixMatchNodeRule("poolaction-nostop.routing.tests.powerdns.com"), PoolAction("real"))
     """
 
     def testPolicyPoolAction(self):
@@ -83,7 +83,7 @@ class TestRoutingPoolRouting(DNSDistTest):
 class TestRoutingQPSPoolRouting(DNSDistTest):
     _config_template = """
     newServer{address="127.0.0.1:%s", pool="regular"}
-    addAction(makeRule("qpspoolaction.routing.tests.powerdns.com"), QPSPoolAction(10, "regular"))
+    addAction(SuffixMatchNodeRule("qpspoolaction.routing.tests.powerdns.com"), QPSPoolAction(10, "regular"))
     """
 
     def testQPSPoolAction(self):
@@ -129,46 +129,16 @@ class TestRoutingQPSPoolRouting(DNSDistTest):
         (_, receivedResponse) = self.sendTCPQuery(query, response=None, useQueue=False)
         self.assertEqual(receivedResponse, None)
 
-
-class TestRoutingRoundRobinLB(DNSDistTest):
-
-    _testServer2Port = 5351
-    _config_params = ['_testServerPort', '_testServer2Port']
-    _config_template = """
-    setServerPolicy(roundrobin)
-    s1 = newServer{address="127.0.0.1:%s"}
-    s1:setUp()
-    s2 = newServer{address="127.0.0.1:%s"}
-    s2:setUp()
-    """
-
-    @classmethod
-    def startResponders(cls):
-        print("Launching responders..")
-        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
-        cls._UDPResponder.start()
-        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
-        cls._UDPResponder2.start()
-
-        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
-        cls._TCPResponder.start()
-
-        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
-        cls._TCPResponder2.start()
-
-    def testRR(self):
+class RoundRobinTest(object):
+    def doTestRR(self, name):
         """
         Routing: Round Robin
 
-        Send 10 A queries to "rr.routing.tests.powerdns.com.",
+        Send 10 A queries to the requested name,
         check that dnsdist routes half of it to each backend.
         """
         numberOfQueries = 10
-        name = 'rr.routing.tests.powerdns.com.'
+        name = name
         query = dns.message.make_query(name, 'A', 'IN')
         response = dns.message.make_response(query)
         rrset = dns.rrset.from_text(name,
@@ -196,9 +166,87 @@ class TestRoutingRoundRobinLB(DNSDistTest):
             value = self._responsesCounter[key]
             self.assertEqual(value, numberOfQueries / 2)
 
+class TestRoutingRoundRobinLB(RoundRobinTest, DNSDistTest):
+
+    _testServer2Port = pickAvailablePort()
+    _config_params = ['_testServerPort', '_testServer2Port']
+    _config_template = """
+    setServerPolicy(roundrobin)
+    s1 = newServer{address="127.0.0.1:%s"}
+    s1:setUp()
+    s2 = newServer{address="127.0.0.1:%s"}
+    s2:setUp()
+    """
+
+    @classmethod
+    def startResponders(cls):
+        print("Launching responders..")
+        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder.daemon = True
+        cls._UDPResponder.start()
+        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder2.daemon = True
+        cls._UDPResponder2.start()
+
+        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder.daemon = True
+        cls._TCPResponder.start()
+
+        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder2.daemon = True
+        cls._TCPResponder2.start()
+
+    def testRR(self):
+        """
+        Routing: Round Robin
+
+        Send 10 A queries to "rr.routing.tests.powerdns.com.",
+        check that dnsdist routes half of it to each backend.
+        """
+        self.doTestRR('rr.routing.tests.powerdns.com.')
+
+class TestRoutingRoundRobinLBViaPool(RoundRobinTest, DNSDistTest):
+
+    _testServer2Port = pickAvailablePort()
+    _config_params = ['_testServerPort', '_testServer2Port']
+    _config_template = """
+    s1 = newServer{address="127.0.0.1:%d"}
+    s1:setUp()
+    s2 = newServer{address="127.0.0.1:%d"}
+    s2:setUp()
+    setPoolServerPolicy(roundrobin, '')
+    """
+
+    @classmethod
+    def startResponders(cls):
+        print("Launching responders..")
+        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder.daemon = True
+        cls._UDPResponder.start()
+        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder2.daemon = True
+        cls._UDPResponder2.start()
+
+        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder.daemon = True
+        cls._TCPResponder.start()
+
+        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder2.daemon = True
+        cls._TCPResponder2.start()
+
+    def testRR(self):
+        """
+        Routing: Round Robin (pool)
+
+        Send 10 A queries to "rr-pool.routing.tests.powerdns.com.",
+        check that dnsdist routes half of it to each backend.
+        """
+        self.doTestRR('rr-pool.routing.tests.powerdns.com.')
+
 class TestRoutingRoundRobinLBOneDown(DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     setServerPolicy(roundrobin)
@@ -250,7 +298,7 @@ class TestRoutingRoundRobinLBOneDown(DNSDistTest):
 
 class TestRoutingRoundRobinLBAllDown(DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     setServerPolicy(roundrobin)
@@ -281,9 +329,9 @@ class TestRoutingRoundRobinLBAllDown(DNSDistTest):
             (_, receivedResponse) = sender(query, response=None, useQueue=False)
             self.assertEqual(receivedResponse, None)
 
-class TestRoutingLuaFFIPerThreadRoundRobinLB(DNSDistTest):
+class TestRoutingLuaFFIPerThreadRoundRobinLB(RoundRobinTest, DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     -- otherwise we start too many TCP workers, and as each thread
@@ -304,65 +352,86 @@ class TestRoutingLuaFFIPerThreadRoundRobinLB(DNSDistTest):
     s1:setUp()
     s2 = newServer{address="127.0.0.1:%s"}
     s2:setUp()
+
+    function atExit()
+      setServerPolicy(leastOutstanding)
+      collectgarbage()
+    end
     """
 
     @classmethod
     def startResponders(cls):
         print("Launching responders..")
         cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
+        cls._UDPResponder.daemon = True
         cls._UDPResponder.start()
         cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
+        cls._UDPResponder2.daemon = True
         cls._UDPResponder2.start()
 
         cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
+        cls._TCPResponder.daemon = True
         cls._TCPResponder.start()
 
         cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
+        cls._TCPResponder2.daemon = True
         cls._TCPResponder2.start()
 
     def testRR(self):
         """
-        Routing: Round Robin
-
-        Send 10 A queries to "rr.routing.tests.powerdns.com.",
-        check that dnsdist routes half of it to each backend.
+        Routing: Round Robin (LuaFFI)
         """
-        numberOfQueries = 10
-        name = 'rr.routing.tests.powerdns.com.'
-        query = dns.message.make_query(name, 'A', 'IN')
-        response = dns.message.make_response(query)
-        rrset = dns.rrset.from_text(name,
-                                    60,
-                                    dns.rdataclass.IN,
-                                    dns.rdatatype.A,
-                                    '192.0.2.1')
-        response.answer.append(rrset)
+        self.doTestRR('rr-luaffi.routing.tests.powerdns.com.')
 
-        # the round robin counter is shared for UDP and TCP,
-        # so we need to do UDP then TCP to have a clean count
-        for _ in range(numberOfQueries):
-            (receivedQuery, receivedResponse) = self.sendUDPQuery(query, response)
-            receivedQuery.id = query.id
-            self.assertEqual(query, receivedQuery)
-            self.assertEqual(response, receivedResponse)
+class TestRoutingCustomLuaRoundRobinLB(RoundRobinTest, DNSDistTest):
 
-        for _ in range(numberOfQueries):
-            (receivedQuery, receivedResponse) = self.sendTCPQuery(query, response)
-            receivedQuery.id = query.id
-            self.assertEqual(query, receivedQuery)
-            self.assertEqual(response, receivedResponse)
+    _testServer2Port = pickAvailablePort()
+    _config_params = ['_testServerPort', '_testServer2Port']
+    _config_template = """
+    -- otherwise we start too many TCP workers, and as each thread
+    -- uses it own counter this makes the TCP queries distribution hard to predict
+    setMaxTCPClientThreads(1)
 
-        for key in self._responsesCounter:
-            value = self._responsesCounter[key]
-            self.assertEqual(value, numberOfQueries / 2)
+    local counter = 0
+    function luaroundrobin(servers_list, dq)
+      counter = counter + 1
+      return servers_list[(counter %% #servers_list)+1]
+    end
+    setServerPolicy(newServerPolicy("custom lua round robin policy", luaroundrobin))
+
+    s1 = newServer{address="127.0.0.1:%s"}
+    s1:setUp()
+    s2 = newServer{address="127.0.0.1:%s"}
+    s2:setUp()
+    """
+
+    @classmethod
+    def startResponders(cls):
+        print("Launching responders..")
+        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder.daemon = True
+        cls._UDPResponder.start()
+        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder2.daemon = True
+        cls._UDPResponder2.start()
+
+        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder.daemon = True
+        cls._TCPResponder.start()
+
+        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder2.daemon = True
+        cls._TCPResponder2.start()
+
+    def testRR(self):
+        """
+        Routing: Round Robin (Lua)
+        """
+        self.doTestRR('rr-lua.routing.tests.powerdns.com.')
 
 class TestRoutingOrder(DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     setServerPolicy(firstAvailable)
@@ -376,18 +445,18 @@ class TestRoutingOrder(DNSDistTest):
     def startResponders(cls):
         print("Launching responders..")
         cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
+        cls._UDPResponder.daemon = True
         cls._UDPResponder.start()
         cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
+        cls._UDPResponder2.daemon = True
         cls._UDPResponder2.start()
 
         cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
+        cls._TCPResponder.daemon = True
         cls._TCPResponder.start()
 
         cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
+        cls._TCPResponder2.daemon = True
         cls._TCPResponder2.start()
 
     def testOrder(self):
@@ -428,7 +497,7 @@ class TestRoutingOrder(DNSDistTest):
 class TestFirstAvailableQPSPacketCacheHits(DNSDistTest):
 
     _verboseMode = True
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     setServerPolicy(firstAvailable)
@@ -444,18 +513,18 @@ class TestFirstAvailableQPSPacketCacheHits(DNSDistTest):
     def startResponders(cls):
         print("Launching responders..")
         cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
+        cls._UDPResponder.daemon = True
         cls._UDPResponder.start()
         cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
+        cls._UDPResponder2.daemon = True
         cls._UDPResponder2.start()
 
         cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
+        cls._TCPResponder.daemon = True
         cls._TCPResponder.start()
 
         cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
+        cls._TCPResponder2.daemon = True
         cls._TCPResponder2.start()
 
     def testOrderQPSCacheHits(self):
@@ -530,9 +599,9 @@ class TestFirstAvailableQPSPacketCacheHits(DNSDistTest):
                 self.assertEqual(receivedResponse, response)
 
         # 4 queries should made it through, 2 UDP and 2 TCP
-        for k,v in self._responsesCounter.items():
-            print(k)
-            print(v)
+        #for k,v in self._responsesCounter.items():
+        #    print(k)
+        #    print(v)
 
         if 'UDP Responder' in self._responsesCounter:
             self.assertEqual(self._responsesCounter['UDP Responder'], 0)
@@ -577,10 +646,13 @@ class TestRoutingNoServer(DNSDistTest):
 
 class TestRoutingWRandom(DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _config_params = ['_testServerPort', '_testServer2Port']
     _config_template = """
     setServerPolicy(wrandom)
+    setWeightedBalancingFactor(1.5)
+    -- this is the default, but let's ensure we can reset it to the initial value
+    setWeightedBalancingFactor(0)
     s1 = newServer{address="127.0.0.1:%s", weight=1}
     s1:setUp()
     s2 = newServer{address="127.0.0.1:%s", weight=2}
@@ -591,18 +663,18 @@ class TestRoutingWRandom(DNSDistTest):
     def startResponders(cls):
         print("Launching responders..")
         cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
+        cls._UDPResponder.daemon = True
         cls._UDPResponder.start()
         cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
+        cls._UDPResponder2.daemon = True
         cls._UDPResponder2.start()
 
         cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
+        cls._TCPResponder.daemon = True
         cls._TCPResponder.start()
 
         cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
+        cls._TCPResponder2.daemon = True
         cls._TCPResponder2.start()
 
     def testWRandom(self):
@@ -648,7 +720,7 @@ class TestRoutingWRandom(DNSDistTest):
 
 class TestRoutingHighValueWRandom(DNSDistTest):
 
-    _testServer2Port = 5351
+    _testServer2Port = pickAvailablePort()
     _consoleKey = DNSDistTest.generateConsoleKey()
     _consoleKeyB64 = base64.b64encode(_consoleKey).decode('ascii')
     _config_params = ['_consoleKeyB64', '_consolePort', '_testServerPort', '_testServer2Port']
@@ -666,18 +738,18 @@ class TestRoutingHighValueWRandom(DNSDistTest):
     def startResponders(cls):
         print("Launching responders..")
         cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder.setDaemon(True)
+        cls._UDPResponder.daemon = True
         cls._UDPResponder.start()
         cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._UDPResponder2.setDaemon(True)
+        cls._UDPResponder2.daemon = True
         cls._UDPResponder2.start()
 
         cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder.setDaemon(True)
+        cls._TCPResponder.daemon = True
         cls._TCPResponder.start()
 
         cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
-        cls._TCPResponder2.setDaemon(True)
+        cls._TCPResponder2.daemon = True
         cls._TCPResponder2.start()
 
     def testHighValueWRandom(self):
@@ -735,3 +807,199 @@ class TestRoutingHighValueWRandom(DNSDistTest):
             self.assertEqual(self._responsesCounter['UDP Responder 2'], numberOfQueries - self._responsesCounter['UDP Responder'])
         if 'TCP Responder 2' in self._responsesCounter:
             self.assertEqual(self._responsesCounter['TCP Responder 2'], numberOfQueries - self._responsesCounter['TCP Responder'])
+
+class TestRoutingWHashed(DNSDistTest):
+
+    _testServer2Port = pickAvailablePort()
+    _config_params = ['_testServerPort', '_testServer2Port']
+    _config_template = """
+    setServerPolicy(whashed)
+    setWeightedBalancingFactor(1.5)
+    -- this is the default, but let's ensure we can reset it to the initial value
+    setWeightedBalancingFactor(0)
+    s1 = newServer{address="127.0.0.1:%s", weight=1}
+    s1:setUp()
+    s2 = newServer{address="127.0.0.1:%s", weight=1}
+    s2:setUp()
+    """
+
+    @classmethod
+    def startResponders(cls):
+        print("Launching responders..")
+        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder.daemon = True
+        cls._UDPResponder.start()
+        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder2.daemon = True
+        cls._UDPResponder2.start()
+
+        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder.daemon = True
+        cls._TCPResponder.start()
+
+        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder2.daemon = True
+        cls._TCPResponder2.start()
+
+    def testHashed(self):
+        """
+        Routing: WHashed
+
+        Send 100 A queries to "<num>.whashed.routing.tests.powerdns.com.",
+        check that dnsdist routes at least 25% to each backend (hashing
+        will not be perfect, especially with so few datapoints, but still).
+        """
+        numberOfQueries = 100
+        suffix = 'whashed.routing.tests.powerdns.com.'
+
+        # the counter is shared for UDP and TCP,
+        # so we need to do UDP then TCP to have a clean count
+        for idx in range(numberOfQueries):
+            name = str(idx) + '.udp.' + suffix
+            query = dns.message.make_query(name, 'A', 'IN')
+            response = dns.message.make_response(query)
+            rrset = dns.rrset.from_text(name,
+                                        60,
+                                        dns.rdataclass.IN,
+                                        dns.rdatatype.A,
+                                        '192.0.2.1')
+            response.answer.append(rrset)
+            (receivedQuery, receivedResponse) = self.sendUDPQuery(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(response, receivedResponse)
+
+        for idx in range(numberOfQueries):
+            name = str(idx) + '.tcp.' + suffix
+            query = dns.message.make_query(name, 'A', 'IN')
+            response = dns.message.make_response(query)
+            rrset = dns.rrset.from_text(name,
+                                        60,
+                                        dns.rdataclass.IN,
+                                        dns.rdatatype.A,
+                                        '192.0.2.1')
+            response.answer.append(rrset)
+            (receivedQuery, receivedResponse) = self.sendTCPQuery(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(response, receivedResponse)
+
+        self.assertGreater(self._responsesCounter['UDP Responder'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['TCP Responder'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['UDP Responder 2'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['TCP Responder 2'], numberOfQueries * 0.25)
+
+class TestRoutingCHashed(DNSDistTest):
+
+    _testServer2Port = pickAvailablePort()
+    _config_params = ['_testServerPort', '_testServer2Port']
+    _config_template = """
+    setServerPolicy(chashed)
+    setConsistentHashingBalancingFactor(1.5)
+    -- this is the default, but let's ensure we can reset it to the initial value
+    setConsistentHashingBalancingFactor(0)
+    s1 = newServer{address="127.0.0.1:%s", weight=1000}
+    s1:setUp()
+    s2 = newServer{address="127.0.0.1:%s", weight=1000}
+    s2:setUp()
+    """
+
+    @classmethod
+    def startResponders(cls):
+        print("Launching responders..")
+        cls._UDPResponder = threading.Thread(name='UDP Responder', target=cls.UDPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder.daemon = True
+        cls._UDPResponder.start()
+        cls._UDPResponder2 = threading.Thread(name='UDP Responder 2', target=cls.UDPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._UDPResponder2.daemon = True
+        cls._UDPResponder2.start()
+
+        cls._TCPResponder = threading.Thread(name='TCP Responder', target=cls.TCPResponder, args=[cls._testServerPort, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder.daemon = True
+        cls._TCPResponder.start()
+
+        cls._TCPResponder2 = threading.Thread(name='TCP Responder 2', target=cls.TCPResponder, args=[cls._testServer2Port, cls._toResponderQueue, cls._fromResponderQueue])
+        cls._TCPResponder2.daemon = True
+        cls._TCPResponder2.start()
+
+    def testHashed(self):
+        """
+        Routing: CHashed
+
+        Send 100 A queries to "<num>.chashed.routing.tests.powerdns.com.",
+        check that dnsdist routes at least 25% to each backend (hashing
+        will not be perfect, especially with so few datapoints, but still).
+        """
+        numberOfQueries = 100
+        suffix = 'chashed.routing.tests.powerdns.com.'
+
+        # the counter is shared for UDP and TCP,
+        # so we need to do UDP then TCP to have a clean count
+        for idx in range(numberOfQueries):
+            name = str(idx) + '.udp.' + suffix
+            query = dns.message.make_query(name, 'A', 'IN')
+            response = dns.message.make_response(query)
+            rrset = dns.rrset.from_text(name,
+                                        60,
+                                        dns.rdataclass.IN,
+                                        dns.rdatatype.A,
+                                        '192.0.2.1')
+            response.answer.append(rrset)
+            (receivedQuery, receivedResponse) = self.sendUDPQuery(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(response, receivedResponse)
+
+        for idx in range(numberOfQueries):
+            name = str(idx) + '.tcp.' + suffix
+            query = dns.message.make_query(name, 'A', 'IN')
+            response = dns.message.make_response(query)
+            rrset = dns.rrset.from_text(name,
+                                        60,
+                                        dns.rdataclass.IN,
+                                        dns.rdatatype.A,
+                                        '192.0.2.1')
+            response.answer.append(rrset)
+            (receivedQuery, receivedResponse) = self.sendTCPQuery(query, response)
+            receivedQuery.id = query.id
+            self.assertEqual(query, receivedQuery)
+            self.assertEqual(response, receivedResponse)
+
+        self.assertGreater(self._responsesCounter['UDP Responder'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['TCP Responder'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['UDP Responder 2'], numberOfQueries * 0.25)
+        self.assertGreater(self._responsesCounter['TCP Responder 2'], numberOfQueries * 0.25)
+
+class TestRoutingLuaFFILBNoServer(DNSDistTest):
+
+    _config_template = """
+    -- we want a ServFail answer when all servers are down
+    setServFailWhenNoServer(true)
+
+    local ffi = require("ffi")
+    local C = ffi.C
+    function luaffipolicy(servers_list, dq)
+      -- return a large value, outside of the number of servers, to indicate that
+      -- no server is available
+      return tonumber(C.dnsdist_ffi_servers_list_get_count(servers_list)) + 100
+    end
+    setServerPolicyLuaFFI("luaffipolicy", luaffipolicy)
+
+    s1 = newServer{address="127.0.0.1:%s"}
+    s1:setDown()
+    """
+    _verboseMode = True
+
+    def testOurPolicy(self):
+        """
+        Routing: LuaFFI policy, all servers are down
+        """
+        name = 'lua-ffi-no-servers.routing.tests.powerdns.com.'
+        query = dns.message.make_query(name, 'A', 'IN')
+        expectedResponse = dns.message.make_response(query)
+        expectedResponse.set_rcode(dns.rcode.SERVFAIL)
+
+        for method in ("sendUDPQuery", "sendTCPQuery"):
+            sender = getattr(self, method)
+            (_, receivedResponse) = sender(query, response=None, useQueue=False)
+            self.assertEqual(expectedResponse, receivedResponse)

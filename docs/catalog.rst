@@ -1,4 +1,4 @@
-Catalog Zones (RFC  TBD)
+Catalog Zones (RFC 9432)
 ========================
 
 Starting with the PowerDNS Authoritative Server 4.7.0, catalog zone support is available.
@@ -11,7 +11,7 @@ Supported catalog versions
 +=================+==========+==========+
 | 1 (ISC)         | No       | Yes      |
 +-----------------+----------+----------+
-| 2 (RFC TBD)     | Yes      | Yes      |
+| 2 (:rfc:`9432`) | Yes      | Yes      |
 +-----------------+----------+----------+
 
 All the important features of catalog zones version "2" are supported.
@@ -41,7 +41,7 @@ None really.
 Per zone settings
 -----------------
 
-It is highly recommended to protect catalog zones with :doc:`TSIG <../tsig>`
+It is highly recommended to protect catalog zones with :doc:`TSIG <../tsig>`.
 
 CATALOG-HASH
 ~~~~~~~~~~~~
@@ -54,7 +54,7 @@ Setting up catalog zones
 ------------------------
 
 .. note::
-  Catalog zone specification and operation is described in `DNS Catalog Zones <https://datatracker.ietf.org/doc/draft-ietf-dnsop-dns-catalog-zones/>`__.
+  Catalog zone specification and operation is described in :rfc:`9432`.
 
 Setting up a producer zone
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -87,7 +87,7 @@ Create a producer zone:
 
 .. code-block:: shell
 
-  pdnsutil load-zone catalog.example zones/catalog.example ZONEFILE
+  pdnsutil load-zone catalog.example ZONEFILE
   pdnsutil set-kind catalog.example producer
 
 Creating producer zones is supported in the :doc:`API <http-api/zone>`, using type ``PRODUCER``.
@@ -101,10 +101,12 @@ In the example below ``example.com`` is the member and ``catalog.example`` is th
 .. code-block:: shell
 
   pdnsutil set-catalog example.com catalog.example
+  pdnsutil set-kind example.com primary
 
 Setting catalog values is supported in the :doc:`API <http-api/zone>`, by setting the ``catalog`` property in the zone properties.
+Setting the catalog to an empty ``""`` removes the member zone from the catalog it is in.
 
-Each member zone may have one or more additional properties as defined in the draft.
+Each member zone may have one or more additional properties as defined in the RFC.
 PowerDNS currently supports the following properties:
 
 - coo - A single DNSName
@@ -133,9 +135,25 @@ The only difference is the type, which is now set to CONSUMER.
 
 .. code-block:: shell
 
-  pdnsutil create-secondary-zone catalog.example 127.0.0.1
+  pdnsutil create-secondary-zone catalog.example 192.0.2.42
   pdnsutil set-kind catalog.example consumer
 
 Creating consumer zones is supported in the :doc:`API <http-api/zone>`, using type ``CONSUMER``.
 
 New member zones on the consumer adopt their primaries from the consumer zone.
+
+Updating a secondary server when primary address/port changes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+If NOTIFY+AXFR are being used to replicate zone changes between the
+primary and secondary servers, and the address and/or port of the
+primary server changes, two steps are necessary on each secondary
+server in order to fully apply the changes.
+
+.. code-block:: shell
+
+  pdnsutil change-secondary-zone-primary catalog.example 192.0.2.45
+  pdns_control retrieve catalog.example
+
+This will update the primary server contact details in each zone
+included in the catalog zone.

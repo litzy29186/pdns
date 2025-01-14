@@ -27,9 +27,11 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-// On OpenBSD mem used as stack should be marked MAP_STACK
-#if !defined(MAP_STACK)
-#define MAP_STACK 0
+// On OpenBSD and NetBSD mem used as stack should be marked MAP_STACK
+#if defined(__OpenBSD__) || defined(__NetBSD__)
+#define PDNS_MAP_STACK MAP_STACK
+#else
+#define PDNS_MAP_STACK 0
 #endif
 
 template <typename T>
@@ -80,21 +82,21 @@ struct lazy_allocator
     const auto padding = getAlignmentPadding(requestedSize, pageSize);
     const size_type allocatedSize = requestedSize + padding + (pageSize * 2);
 
-#ifdef __OpenBSD__
-    // OpenBSD does not like mmap MAP_STACK regions that have
+#if defined(__OpenBSD__) || defined(__NetBSD__)
+    // OpenBSD and NetBSD don't like mmap MAP_STACK regions that have
     // PROT_NONE, so allocate r/w and mprotect the guard pages
-    // explictly.
+    // explicitly.
     const int protection = PROT_READ | PROT_WRITE;
 #else
     const int protection = PROT_NONE;
 #endif
-    void* p = mmap(nullptr, allocatedSize, protection, MAP_PRIVATE | MAP_ANON | MAP_STACK, -1, 0);
+    void* p = mmap(nullptr, allocatedSize, protection, MAP_PRIVATE | MAP_ANON | PDNS_MAP_STACK, -1, 0);
     if (p == MAP_FAILED) {
       throw std::bad_alloc();
     }
     char* basePointer = static_cast<char*>(p);
     void* usablePointer = basePointer + pageSize;
-#ifdef __OpenBSD__
+#if defined(__OpenBSD__) || defined(__NetBSD__)
     int res = mprotect(basePointer, pageSize, PROT_NONE);
     if (res != 0) {
       munmap(p, allocatedSize);

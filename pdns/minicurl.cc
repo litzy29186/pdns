@@ -80,7 +80,7 @@ size_t MiniCurl::write_callback(char *ptr, size_t size, size_t nmemb, void *user
 }
 
 #if defined(LIBCURL_VERSION_NUM) && LIBCURL_VERSION_NUM >= 0x072000 // 7.32.0
-size_t MiniCurl::progress_callback(void *clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow)
+size_t MiniCurl::progress_callback(void *clientp, curl_off_t /* dltotal */, curl_off_t dlnow, curl_off_t /* ultotal */, curl_off_t /* ulnow */)
 {
   if (clientp != nullptr) {
     MiniCurl* us = static_cast<MiniCurl*>(clientp);
@@ -116,7 +116,7 @@ static string extractHostFromURL(const std::string& url)
   return url.substr(pos, endpos-pos);
 }
 
-void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, size_t byteslimit, bool fastopen, bool verify)
+void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, size_t byteslimit, [[maybe_unused]] bool fastopen, bool verify)
 {
   if (!d_fresh) {
     curl_easy_reset(getCURLPtr(d_curl));
@@ -198,7 +198,7 @@ void MiniCurl::setupURL(const std::string& str, const ComboAddress* rem, const C
   d_data.clear();
 }
 
-std::string MiniCurl::getURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, bool fastopen, bool verify, size_t byteslimit)
+std::string MiniCurl::getURL(const std::string& str, const ComboAddress* rem, const ComboAddress* src, int timeout, [[maybe_unused]] bool fastopen, bool verify, size_t byteslimit)
 {
   setupURL(str, rem, src, timeout, byteslimit, fastopen, verify);
   auto res = curl_easy_perform(getCURLPtr(d_curl));

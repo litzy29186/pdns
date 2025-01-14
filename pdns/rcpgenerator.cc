@@ -255,21 +255,27 @@ void RecordTextReader::xfrName(DNSName& val, bool, bool)
   skipSpaces();
   DNSName sval;
 
-  const char* strptr=d_string.c_str();
   string::size_type begin_pos = d_pos;
-  while(d_pos < d_end) {
-    if(strptr[d_pos]!='\r' && dns_isspace(strptr[d_pos]))
+  while (d_pos < d_end) {
+    if (d_string[d_pos]!='\r' && dns_isspace(d_string[d_pos])) {
       break;
+    }
 
     d_pos++;
   }
-  sval = DNSName(std::string(strptr+begin_pos, strptr+d_pos));
 
-  if(sval.empty())
-    sval=d_zone;
-  else if(!d_zone.empty())
-    sval+=d_zone;
-  val = sval;
+  {
+    std::string_view view(d_string);
+    sval = DNSName(view.substr(begin_pos, d_pos - begin_pos));
+  }
+
+  if (sval.empty()) {
+    sval = d_zone;
+  }
+  else if (!d_zone.empty()) {
+    sval += d_zone;
+  }
+  val = std::move(sval);
 }
 
 static bool isbase64(char c, bool acceptspace)
@@ -329,7 +335,7 @@ void RecordTextReader::xfrSVCBValueList(vector<string> &val) {
   d_pos += ctr;
 }
 
-void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
+void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val) // NOLINT(readability-function-cognitive-complexity)
 {
   while (d_pos != d_end) {
     skipSpaces();
@@ -463,7 +469,13 @@ void RecordTextReader::xfrSvcParamKeyVals(set<SvcParam>& val)
         port = (v.at(0) << 8);
         port += v.at(1);
       } else {
-        xfr16BitInt(port);
+        string portstring;
+        xfrRFC1035CharString(portstring);
+        try {
+          pdns::checked_stoi_into(port, portstring);
+        } catch (const std::exception &e) {
+          throw RecordTextException(e.what());
+        }
       }
       val.insert(SvcParam(key, port));
       break;
@@ -534,8 +546,7 @@ static void HEXDecode(const char* begin, const char* end, string& out)
     }
   }
   if(mode)
-    out.append(1, (char) val);
-
+    throw RecordTextException("Hexadecimal blob with odd number of characters");
 }
 
 void RecordTextReader::xfrHexBlob(string& val, bool keepReading)
@@ -568,7 +579,7 @@ void RecordTextWriter::xfrBase32HexBlob(const string& val)
 }
 
 
-void RecordTextReader::xfrText(string& val, bool multi, bool lenField)
+void RecordTextReader::xfrText(string& val, bool multi, bool /* lenField */)
 {
   val.clear();
   val.reserve(d_end - d_pos);
@@ -607,7 +618,7 @@ void RecordTextReader::xfrText(string& val, bool multi, bool lenField)
   }
 }
 
-void RecordTextReader::xfrUnquotedText(string& val, bool lenField)
+void RecordTextReader::xfrUnquotedText(string& val, bool /* lenField */)
 {
   val.clear();
   val.reserve(d_end - d_pos);
@@ -741,7 +752,7 @@ void RecordTextWriter::xfrIP6(const std::string& val)
   d_string += std::string(addrbuf);
 }
 
-void RecordTextWriter::xfrCAWithoutPort(uint8_t version, ComboAddress &val)
+void RecordTextWriter::xfrCAWithoutPort(uint8_t /* version */, ComboAddress &val)
 {
   string ip = val.toString();
 
@@ -781,7 +792,7 @@ void RecordTextWriter::xfr8BitInt(const uint8_t& val)
 }
 
 // should not mess with the escapes
-void RecordTextWriter::xfrName(const DNSName& val, bool, bool noDot)
+void RecordTextWriter::xfrName(const DNSName& val, bool /* unused */, bool /* noDot */)
 {
   if(!d_string.empty())
     d_string.append(1,' ');
@@ -941,7 +952,7 @@ void RecordTextWriter::xfrSvcParamKeyVals(const set<SvcParam>& val) {
   }
 }
 
-void RecordTextWriter::xfrText(const string& val, bool multi, bool lenField)
+void RecordTextWriter::xfrText(const string& val, bool /* multi */, bool /* lenField */)
 {
   if(!d_string.empty())
     d_string.append(1,' ');
@@ -949,7 +960,7 @@ void RecordTextWriter::xfrText(const string& val, bool multi, bool lenField)
   d_string.append(val);
 }
 
-void RecordTextWriter::xfrUnquotedText(const string& val, bool lenField)
+void RecordTextWriter::xfrUnquotedText(const string& val, bool /* lenField */)
 {
   if(!d_string.empty())
     d_string.append(1,' ');

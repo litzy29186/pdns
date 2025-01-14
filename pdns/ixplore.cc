@@ -87,12 +87,12 @@ int main(int argc, char** argv) {
 
       set_difference(before.cbegin(), before.cend(), after.cbegin(), after.cend(), back_inserter(diff), before.value_comp());
       for(const auto& d : diff) {
-        cout<<'-'<< (d.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(d.d_type)<<" "<<d.d_content->getZoneRepresentation()<<endl;
+        cout<<'-'<< (d.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(d.d_type)<<" "<<d.getContent()->getZoneRepresentation()<<endl;
       }
       diff.clear();
       set_difference(after.cbegin(), after.cend(), before.cbegin(), before.cend(), back_inserter(diff), before.value_comp());
       for(const auto& d : diff) {
-        cout<<'+'<< (d.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(d.d_type)<<" "<<d.d_content->getZoneRepresentation()<<endl;
+        cout<<'+'<< (d.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(d.d_type)<<" "<<d.getContent()->getZoneRepresentation()<<endl;
       }
       exit(1);
     }
@@ -101,7 +101,7 @@ int main(int argc, char** argv) {
 
     /* goal in life:
        in directory/zone-name we leave files with their name the serial number
-       at startup, retrieve current SOA SERIAL for domain from master server
+       at startup, retrieve current SOA SERIAL for domain from primary server
 
        compare with what the best is we have in our directory, IXFR from that.
        Store result in memory, read that best zone in memory, apply deltas, write it out.
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
        Next up, loop this every REFRESH seconds */
 
     DNSName zone(argv[4]);
-    ComboAddress master(argv[2], atoi(argv[3]));
+    ComboAddress primary(argv[2], atoi(argv[3]));
     string directory(argv[5]);
     records_t records;
 
@@ -141,9 +141,9 @@ int main(int argc, char** argv) {
     }
     catch(std::exception& e) {
       cout<<"Could not load zone from disk: "<<e.what()<<endl;
-      cout<<"Retrieving latest from master "<<master.toStringWithPort()<<endl;
-      ComboAddress local = master.sin4.sin_family == AF_INET ? ComboAddress("0.0.0.0") : ComboAddress("::");
-      AXFRRetriever axfr(master, zone, tt, &local);
+      cout << "Retrieving latest from primary " << primary.toStringWithPort() << endl;
+      ComboAddress local = primary.sin4.sin_family == AF_INET ? ComboAddress("0.0.0.0") : ComboAddress("::");
+      AXFRRetriever axfr(primary, zone, tt, &local);
       unsigned int nrecords=0;
       Resolver::res_t nop;
       vector<DNSRecord> chunk;
@@ -177,17 +177,17 @@ int main(int argc, char** argv) {
 
       cout<<"Checking for update, our serial number is "<<ourSerial<<".. ";
       cout.flush();
-      shared_ptr<SOARecordContent> sr;
-      uint32_t serial = getSerialFromMaster(master, zone, sr, tt);
+      shared_ptr<const SOARecordContent> sr;
+      uint32_t serial = getSerialFromPrimary(primary, zone, sr, tt);
       if(ourSerial == serial) {
-        time_t sleepTime = sr ? sr->d_st.refresh : 60;
+        unsigned int sleepTime = sr ? sr->d_st.refresh : 60;
         cout<<"still up to date, their serial is "<<serial<<", sleeping "<<sleepTime<<" seconds"<<endl;
         sleep(sleepTime);
         continue;
       }
 
       cout<<"got new serial: "<<serial<<", initiating IXFR!"<<endl;
-      auto deltas = getIXFRDeltas(master, zone, ourSoa, 20, false, tt);
+      auto deltas = getIXFRDeltas(primary, zone, ourSoa, 20, false, tt);
       cout<<"Got "<<deltas.size()<<" deltas, applying.."<<endl;
 
       for(const auto& delta : deltas) {
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
         uint32_t newserial=0;
         for(const auto& rr : add) {
           if(rr.d_type == QType::SOA) {
-            newserial=std::dynamic_pointer_cast<SOARecordContent>(rr.d_content)->d_st.serial;
+            newserial=getRR<SOARecordContent>(rr)->d_st.serial;
           }
         }
 
@@ -214,8 +214,8 @@ int main(int argc, char** argv) {
         bool stop=false;
 
         for(const auto& rr : remove) {
-          report<<'-'<< (rr.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(rr.d_type)<<" "<<rr.d_content->getZoneRepresentation()<<endl;
-          auto range = records.equal_range(std::tie(rr.d_name, rr.d_type, rr.d_class, rr.d_content));
+          report<<'-'<< (rr.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(rr.d_type)<<" "<<rr.getContent()->getZoneRepresentation()<<endl;
+          auto range = records.equal_range(std::tie(rr.d_name, rr.d_type, rr.d_class, rr.getContent()));
           if(range.first == range.second) {
             cout<<endl<<" !! Could not find record "<<rr.d_name<<" to remove!!"<<endl;
             //	  stop=true;
@@ -225,7 +225,7 @@ int main(int argc, char** argv) {
         }
 
         for(const auto& rr : add) {
-          report<<'+'<< (rr.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(rr.d_type)<<" "<<rr.d_content->getZoneRepresentation()<<endl;
+          report<<'+'<< (rr.d_name+zone) <<" IN "<<DNSRecordContent::NumberToType(rr.d_type)<<" "<<rr.getContent()->getZoneRepresentation()<<endl;
           records.insert(rr);
         }
         if(stop) {

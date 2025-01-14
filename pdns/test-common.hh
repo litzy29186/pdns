@@ -22,7 +22,7 @@ static inline std::shared_ptr<DNSRecordContent> getRecordContent(uint16_t type, 
     result = std::make_shared<OPTRecordContent>();
   }
   else {
-    result = DNSRecordContent::mastermake(type, QClass::IN, content);
+    result = DNSRecordContent::make(type, QClass::IN, content);
   }
 
   return result;
@@ -36,7 +36,7 @@ static inline void addRecordToList(std::vector<DNSRecord>& records, const DNSNam
   rec.d_type = type;
   rec.d_ttl = ttl;
 
-  rec.d_content = getRecordContent(type, content);
+  rec.setContent(getRecordContent(type, content));
 
   records.push_back(rec);
 }

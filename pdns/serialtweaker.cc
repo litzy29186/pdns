@@ -59,6 +59,7 @@ uint32_t calculateEditSOA(uint32_t old_serial, const string& kind, const DNSName
     return (old_serial + (inception / (7*86400)));
   }
   else if(pdns_iequals(kind,"EPOCH")) {
+    // coverity[store_truncates_time_t]
     return time(nullptr);
   }
   else if(pdns_iequals(kind,"INCEPTION-EPOCH")) {
@@ -107,6 +108,7 @@ static uint32_t calculateIncreaseSOA(uint32_t old_serial, const string& increase
     return old_serial + 1;
   }
   else if (pdns_iequals(increaseKind, "EPOCH")) {
+    // coverity[store_truncates_time_t]
     return time(nullptr);
   }
   else if (pdns_iequals(increaseKind, "DEFAULT")) {
@@ -170,7 +172,7 @@ DNSZoneRecord makeEditedDNSZRFromSOAData(DNSSECKeeper& dk, const SOAData& sd, DN
   soa.d_type = QType::SOA;
   soa.d_ttl = sd.ttl;
   soa.d_place = place;
-  soa.d_content = makeSOAContent(edited);
+  soa.setContent(makeSOAContent(edited));
 
   DNSZoneRecord dzr;
   dzr.domain_id = sd.domain_id;

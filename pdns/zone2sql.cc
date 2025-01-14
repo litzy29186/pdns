@@ -111,16 +111,17 @@ static void startNewTransaction()
     cout<<"BEGIN TRANSACTION;"<<endl;
 }
 
-static void emitDomain(const DNSName& domain, const vector<ComboAddress> *masters = nullptr) {
+static void emitDomain(const DNSName& domain, const vector<ComboAddress>* primaries = nullptr)
+{
   string iDomain = domain.toStringRootDot();
-  if(!::arg().mustDo("slave")) {
+  if (!::arg().mustDo("secondary")) {
     cout<<"insert into domains (name,type) values ("<<toLower(sqlstr(iDomain))<<",'NATIVE');"<<endl;
   }
   else
   {
     string mstrs;
-    if (masters != nullptr && ! masters->empty()) {
-      for(const auto& mstr :  *masters) {
+    if (primaries != nullptr && !primaries->empty()) {
+      for (const auto& mstr : *primaries) {
         mstrs.append(mstr.toStringWithPortExcept(53));
         mstrs.append(1, ' ');
       }
@@ -193,7 +194,7 @@ ArgvMap &arg()
 }
 
 
-int main(int argc, char **argv)
+int main(int argc, char **argv) // NOLINT(readability-function-cognitive-complexity) 13379 https://github.com/PowerDNS/pdns/issues/13379 Habbie: zone2sql.cc, bindbackend2.cc: reduce complexity
 try
 {
     reportAllTypes();
@@ -203,7 +204,7 @@ try
     ::arg().setSwitch("gmysql","Output in format suitable for default gmysqlbackend")="no";
     ::arg().setSwitch("gsqlite","Output in format suitable for default gsqlitebackend")="no";
     ::arg().setSwitch("verbose","Verbose comments on operation")="no";
-    ::arg().setSwitch("slave","Keep BIND slaves as slaves. Only works with named-conf.")="no";
+    ::arg().setSwitch("secondary", "Keep BIND secondaries as secondaries. Only works with named-conf.") = "no";
     ::arg().setSwitch("json-comments","Parse json={} field for disabled & comments")="no";
     ::arg().setSwitch("transactions","If target SQL supports it, use transactions")="no";
     ::arg().setSwitch("on-error-resume-next","Continue after errors")="no";
@@ -285,14 +286,14 @@ try
 
       for(const auto & domain : domains)
         {
-          if(domain.type!="master" && domain.type!="slave") {
-            cerr<<" Warning! Skipping '"<<domain.type<<"' zone '"<<domain.name<<"'"<<endl;
-            continue;
-          }
+        if (domain.type != "primary" && domain.type != "secondary" && !domain.type.empty() && domain.type != "master" && domain.type != "slave") {
+          cerr << " Warning! Skipping '" << domain.type << "' zone '" << domain.name << "'" << endl;
+          continue;
+        }
           try {
             startNewTransaction();
 
-            emitDomain(domain.name, &(domain.masters));
+            emitDomain(domain.name, &(domain.primaries));
 
             ZoneParserTNG zpt(domain.filename, domain.name, BP.getDirectory());
             zpt.setMaxGenerateSteps(::arg().asNum("max-generate-steps"));

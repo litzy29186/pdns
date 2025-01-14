@@ -175,6 +175,7 @@ authconfdir
 authdir
 authdirs
 authdomain
+authip
 authlog
 authname
 authoritatives
@@ -239,6 +240,7 @@ batchmode
 baz
 bbnew
 bbold
+bbr
 bbsv
 bccaf
 bdr
@@ -415,6 +417,7 @@ cfile
 cft
 cgit
 CHACHA
+charset
 chartocode
 checkbox
 checkfunc
@@ -425,9 +428,11 @@ checkrr
 checkzone
 chgrp
 childstat
-chkconfig
+chmod
+chown
 chr
 chrono
+cidr
 cin
 cinttypes
 ciphersuites
@@ -646,7 +651,6 @@ DEBFULLNAME
 debhelper
 debtest
 DEBUGLOG
-decafsigners
 decltype
 deconfigure
 deconfigured
@@ -750,6 +754,8 @@ dnsdistrules
 dnsdisttcp
 dnsdisttests
 dnserrors
+DNSHEADER
+dnsheader
 DNSID
 DNSIP
 dnskeyr
@@ -823,6 +829,7 @@ dontdrop
 dontinclude
 dontqueries
 DONTWAIT
+DOQ
 doquery
 dosec
 dotests
@@ -1054,7 +1061,6 @@ ETIMEDOUT
 Eto
 etree
 etry
-eturn
 eui
 evah
 eventkey
@@ -1080,7 +1086,6 @@ exitvalue
 Expat
 expectedlen
 expf
-explicitely
 expr
 expungebyname
 expungebynameandtype
@@ -1308,6 +1313,7 @@ getvalue
 getvars
 ghostscript
 gir
+github
 gitlab
 givr
 gjeqe
@@ -1436,15 +1442,11 @@ HSIZE
 HSw
 HTAB
 htmlfiles
-htobe
-htole
-htonl
-htons
-htons'ed
 httpconnector
 httpconnects
 httpd
 HTTPHEADER
+https
 httpversion
 HUnit
 hwinfo
@@ -1807,7 +1809,6 @@ llu
 LMDBQ
 lnc
 lnow
-loaderdecaf
 loadersodium
 loadfile
 loadmodule
@@ -1819,6 +1820,7 @@ localdata
 localname
 localsock
 localstatedir
+localwho
 loctext
 locwild
 logaction
@@ -2305,6 +2307,8 @@ Nro
 nrr
 nsa
 nscount
+NSD
+nsd
 nsdname
 nsdomain
 nseconds
@@ -2538,10 +2542,10 @@ pbegin
 pbf
 PBKDF
 PBpq
+pbr
 pbtag
 pcall
 PCDNSSEC
-PCKS
 PCmissing
 pcomp
 pcount
@@ -2656,6 +2660,8 @@ posix
 postdata
 POSTFIELDS
 POSTFIELDSIZE
+postgre
+Postgre
 postoutquery
 postpol
 postprepare
@@ -2663,7 +2669,7 @@ postqueries
 postun
 postvars
 potentialsupermasters
-powerdn
+powerdns
 poweroften
 powertools
 pparent
@@ -2879,6 +2885,7 @@ realpath
 realqps
 realreferral
 realrr
+realtime
 realzone
 RECCONTROL
 reccount
@@ -3015,6 +3022,7 @@ rmdir
 rmtree
 RMz
 rnameservers
+rng
 rnow
 rollbackmarker
 romap
@@ -3132,6 +3140,7 @@ sched
 schemaversion
 scl
 sclo
+scm
 SCNu
 SCombo
 SConnect
@@ -3290,11 +3299,10 @@ smokeyjoe
 smp
 smt
 smtarg
+smtp
 SMTs
 smvmlo
-SMy
 smysql
-Smz
 sname
 snaplen
 snd
@@ -3325,7 +3333,6 @@ sockname
 sockowner
 socktype
 sodbc
-sodcrypto
 sodiumsigners
 sokolov
 somedata
@@ -3380,6 +3387,7 @@ sscanf
 SSetsockopt
 ssh
 ssize
+ssl
 sslctx
 SSLECDSADNS
 SSLEDDSADNS
@@ -3387,7 +3395,6 @@ SSLRSADNS
 sslsock
 SSLTLS
 SSLTLSIO
-SSLv
 SSocket
 ssql
 ssqlite
@@ -3538,8 +3545,8 @@ tcpavgqueriesperconnection
 tcpbench
 tcpbytesanswered
 tcpclient
-tcpclientimeouts
 tcpclientthreads
+tcpclienttimeouts
 tcpcurrentconnections
 tcpdiedreaddingresponse
 tcpdiedreadingquery
@@ -3648,6 +3655,8 @@ timersonly
 Timespan
 timespec
 timespent
+timezone
+timezones
 tinfo
 tini
 TINYDNSDATA
@@ -3793,6 +3802,7 @@ TZOFF
 uapi
 UBIGINT
 ubsan
+ubuntu
 UBXc
 ucf
 ucfq
@@ -3843,6 +3853,9 @@ undeffed
 UNDOC
 unescape
 unhexlify
+unicode
+Unicode
+UNICODE
 uninstall
 uniq
 uniquw
@@ -3871,6 +3884,7 @@ uppercasing
 upq
 upto
 urc
+url
 urljoin
 urllib
 urlmap
@@ -3880,9 +3894,11 @@ uroot
 useconds
 uselessdrc
 useradd
+useragent
 userdata
 userfriendly
 usermsec
+username
 userperc
 USHRT
 usleep
@@ -3991,6 +4007,8 @@ WEBPORT
 webrick
 webserv
 webserveropts
+website
+websites
 wednserrors
 weekno
 weirdtxt
@@ -4025,6 +4043,7 @@ WNOHANG
 Woi
 Wor
 wordpad
+workarounds
 workdir
 workflow
 Wowie
@@ -4040,6 +4059,7 @@ wshash
 WSIZE
 WTERMSIG
 wtest
+www
 wwwds
 wwwezdnsit
 wwwpowerdnscom
@@ -4061,9 +4081,13 @@ XFRd
 XFRM
 xfrserver
 xhr
+XHTML
+xhtml
 xit
 xlabel
 xluajit
+xml
+XML
 XMy
 xno
 Xof

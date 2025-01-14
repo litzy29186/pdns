@@ -33,7 +33,7 @@ class RootNXTrustRecursorTest(RecursorTest):
             if outgoing1 == outgoing2:
                 break
 
-class testRootNXTrustDisabled(RootNXTrustRecursorTest):
+class RootNXTrustDisabledTest(RootNXTrustRecursorTest):
     _confdir = 'RootNXTrustDisabled'
     _wsPort = 8042
     _wsTimeout = 2
@@ -86,7 +86,7 @@ extended-resolution-errors
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 0)
 
-class testRootNXTrustEnabled(RootNXTrustRecursorTest):
+class RootNXTrustEnabledTest(RootNXTrustRecursorTest):
     _confdir = 'RootNXTrustEnabled'
     _wsPort = 8042
     _wsTimeout = 2
@@ -138,4 +138,4 @@ extended-resolution-errors
         self.assertEqual(res.edns, 0)
         self.assertEqual(len(res.options), 1)
         self.assertEqual(res.options[0].otype, 15)
-        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(0, b'Result synthesized by root-nx-trust'))
+        self.assertEqual(res.options[0], extendederrors.ExtendedErrorOption(29, b'Result synthesized by root-nx-trust'))

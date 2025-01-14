@@ -37,7 +37,6 @@ namespace rec
 // Simple counters
 enum class Counter : uint8_t
 {
-  syncresqueries,
   outgoingtimeouts,
   outgoing4timeouts,
   outgoing6timeouts,
@@ -60,6 +59,7 @@ enum class Counter : uint8_t
   sourceDisallowedNotify, // when this is increased, qcounter is also
   zoneDisallowedNotify, // when this is increased, qcounter is also
   policyDrops,
+  tcpOverflow,
   tcpClientOverflow,
   clientParseError,
   serverParseError,
@@ -78,7 +78,6 @@ enum class Counter : uint8_t
   ednsPingMismatches,
   noPingOutQueries,
   noEdnsOutQueries,
-  packetCacheHits,
   noPacketError,
   ignoredCount,
   emptyQueriesCount,
@@ -94,6 +93,11 @@ enum class Counter : uint8_t
   dns64prefixanswers,
   maintenanceUsec,
   maintenanceCalls,
+  nodCount,
+  udrCount,
+  maxChainLength,
+  maxChainWeight,
+  chainLimits,
 
   numberOfCounters
 };

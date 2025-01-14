@@ -8,8 +8,95 @@ Please upgrade to the PowerDNS Authoritative Server 4.0.0 from 3.4.2+.
 See the `3.X <https://doc.powerdns.com/3/authoritative/upgrading/>`__
 upgrade notes if your version is older than 3.4.2.
 
-4.6.0 to 4.7.0 or master
-------------------------
+4.9.0 to 5.0.0/master
+---------------------
+
+LUA records whitespace insertion
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:ref:`setting-lua-records-insert-whitespace`, introduced in 4.9.1 with the default value (``yes``) set to maintain the old behaviour of inserting whitespace, is set to ``no`` in 5.0.
+
+ixfrdist IPv6 support
+^^^^^^^^^^^^^^^^^^^^^
+
+``ixfrdist`` now binds listening sockets with `IPV6_V6ONLY set`, which means that ``[::]`` no longer accepts IPv4 connections.
+If you want to listen on both IPv4 and IPv6, you need to add a line with ``0.0.0.0`` to the ``listen`` section of your ixfrdist configuration.
+
+4.8.0 to 4.9.0
+--------------
+
+Removed options
+^^^^^^^^^^^^^^^
+
+Various settings, deprecated since 4.5.0, have been removed.
+
+* :ref:`setting-allow-unsigned-supermaster` is now :ref:`setting-allow-unsigned-autoprimary`
+* :ref:`setting-master` is now :ref:`setting-primary`
+* :ref:`setting-slave-cycle-interval` is now :ref:`setting-xfr-cycle-interval`
+* :ref:`setting-slave-renotify` is now :ref:`setting-secondary-do-renotify`
+* :ref:`setting-slave` is now :ref:`setting-secondary`
+* :ref:`setting-superslave` is now :ref:`setting-autosecondary`
+
+In :ref:`setting-lmdb-sync-mode`, the previous default ``mapasync`` is no longer a valid value.
+Due to a bug, it was interpreted as ``sync`` in previous versions.
+To avoid operational surprises, ``sync`` is the new default value.
+
+Renamed options
+^^^^^^^^^^^^^^^
+
+Bind backend
+~~~~~~~~~~~~
+
+Various experimental autoprimary settings have been renamed.
+
+* ``supermaster-config`` is now ``autoprimary-config``
+* ``supermasters`` is now ``autoprimaries``
+* ``supermaster-destdir`` is now ``autoprimary-destdir``
+
+Gsql backends
+~~~~~~~~~~~~~
+
+Various custom queries have been renamed.
+
+* ``info-all-slaves-query`` is now ``info-all-secondaries-query``
+* ``supermaster-query`` is now ``autoprimary-query``
+* ``supermaster-name-to-ips`` is now ``autoprimary-name-to-ips``
+* ``supermaster-add`` is now ``autoprimary-add``
+* ``update-master-query`` is now ``update-primary-query``
+* ``info-all-master-query`` is now ``info-all-primary-query``
+
+Also, ``get-all-domains-query`` got an extra column for a zone's catalog assignment.
+
+API changes
+~~~~~~~~~~~
+
+A long time ago (in version 3.4.2), the ``priority`` field was removed from record content in the HTTP API.
+Starting with 4.9, API calls containing a ``priority`` field are actively rejected.
+This makes it easier for users to detect they are attempting to use a very old API client.
+
+any version to 4.8.x
+--------------------
+
+Use of (RSA-)SHA1 on Red Hat Enterprise Linux 9 and derivatives
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+If you are using PowerDNS Authoritative Server on EL9, please read `this ticket about Red Hat's SHA1 deprecation and how it affects PowerDNS software <https://github.com/PowerDNS/pdns/issues/12890>`__.
+
+LMDB backend
+^^^^^^^^^^^^
+
+Version 4.8.0-alpha1 ships a new version of the LMDB database schema (called version 5), for compatibility with `Lightning Stream <https://doc.powerdns.com/lightningstream>`_.
+This schema is somewhat experimental, and although we do intend to make databases portable/upgradeable to future releases in the 4.8 train, we currently make no promises.
+There is no downgrade process.
+If you upgrade your database (by starting 4.8.0 without ``lmdb-schema-version=4``), you cannot go back.
+
+Upgrading is only supported from database schema versions 3 and 4, that is, databases created/upgraded by version 4.4 and up.
+
+In version 4.8.0, schema version 5 is finalised.
+Databases created with -alpha1 or -beta1 work with 4.8.0.
+
+4.6.0 to 4.7.0
+--------------
 
 Schema changes
 ^^^^^^^^^^^^^^
@@ -81,7 +168,7 @@ Renamed options
 ~~~~~~~~~~~~~~~
 
 Various settings have been renamed.
-Their old names still work in 4.5.x, but will be removed in the release after it.
+Their old names still work in 4.5.x, but will be removed in a release after it.
 
 * :ref:`setting-allow-unsigned-supermaster` is now :ref:`setting-allow-unsigned-autoprimary`
 * :ref:`setting-master` is now :ref:`setting-primary`

@@ -37,6 +37,10 @@ Example
   domains:
     - domain: example.com
       master: 192.0.2.18:5301
+      max-soa-refresh: 1800
+      notify:
+        - 192.0.3.1
+        - 192.0.3.2:5301
     - domain: example.net
       master: 2001:DB8:ABCD::2
 
@@ -103,6 +107,10 @@ Options
            Mandatory.
   :master: IP address of the server to transfer this domain from.
            Mandatory.
+  :max-soa-refresh: Cap the refresh time to the given maximum (in seconds).
+           Optional.
+  :notify: The list of destinations to send NOTIFY to.
+           Optional.
 
 :webserver-address:
   IP address to listen on for the built-in webserver.

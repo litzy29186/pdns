@@ -15,15 +15,13 @@ enum class IOState : uint8_t { Done, NeedRead, NeedWrite, Async };
 class TLSSession
 {
 public:
-  virtual ~TLSSession()
-  {
-  }
+  virtual ~TLSSession() = default;
 };
 
 class TLSConnection
 {
 public:
-  virtual ~TLSConnection() { }
+  virtual ~TLSConnection() = default;
   virtual void doHandshake() = 0;
   virtual IOState tryConnect(bool fastOpen, const ComboAddress& remote) = 0;
   virtual void connect(bool fastOpen, const ComboAddress& remote, const struct timeval& timeout) = 0;
@@ -32,7 +30,6 @@ public:
   virtual size_t write(const void* buffer, size_t bufferSize, const struct timeval& writeTimeout) = 0;
   virtual IOState tryWrite(const PacketBuffer& buffer, size_t& pos, size_t toWrite) = 0;
   virtual IOState tryRead(PacketBuffer& buffer, size_t& pos, size_t toRead, bool allowIncomplete=false) = 0;
-  virtual bool hasBufferedData() const = 0;
   virtual std::string getServerNameIndication() const = 0;
   virtual std::vector<uint8_t> getNextProtocol() const = 0;
   virtual LibsslTLSVersion getTLSVersion() const = 0;
@@ -76,15 +73,18 @@ public:
   {
     d_rotatingTicketsKey.clear();
   }
-  virtual ~TLSCtx() {}
+  virtual ~TLSCtx() = default;
   virtual std::unique_ptr<TLSConnection> getConnection(int socket, const struct timeval& timeout, time_t now) = 0;
   virtual std::unique_ptr<TLSConnection> getClientConnection(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout) = 0;
   virtual void rotateTicketsKey(time_t now) = 0;
-  virtual void loadTicketsKeys(const std::string& file)
+  virtual void loadTicketsKeys(const std::string& /* file */)
   {
     throw std::runtime_error("This TLS backend does not have the capability to load a tickets key from a file");
   }
-
+  virtual void loadTicketsKey(const std::string& /* key */)
+  {
+    throw std::runtime_error("This TLS backend does not have the capability to load a ticket key");
+  }
   void handleTicketsKeyRotation(time_t now)
   {
     if (d_ticketsKeyRotationDelay != 0 && now > d_ticketsKeyNextRotation) {
@@ -115,28 +115,35 @@ public:
   virtual size_t getTicketsKeysCount() = 0;
   virtual std::string getName() const = 0;
 
-  /* set the advertised ALPN protocols, in client or server context */
-  virtual bool setALPNProtos(const std::vector<std::vector<uint8_t>>& protos)
-  {
-    return false;
-  }
+  using tickets_key_added_hook = std::function<void(const std::string& key)>;
 
-  /* called in a client context, if the client advertised more than one ALPN values and the server returned more than one as well, to select the one to use. */
-  virtual bool setNextProtocolSelectCallback(bool(*)(unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen))
+  static void setTicketsKeyAddedHook(const tickets_key_added_hook& hook)
   {
-    return false;
+    TLSCtx::s_ticketsKeyAddedHook = hook;
   }
-
+  static const tickets_key_added_hook& getTicketsKeyAddedHook()
+  {
+    return TLSCtx::s_ticketsKeyAddedHook;
+  }
+  static bool hasTicketsKeyAddedHook()
+  {
+    return TLSCtx::s_ticketsKeyAddedHook != nullptr;
+  }
 protected:
   std::atomic_flag d_rotatingTicketsKey;
   std::atomic<time_t> d_ticketsKeyNextRotation{0};
   time_t d_ticketsKeyRotationDelay{0};
+
+private:
+  static tickets_key_added_hook s_ticketsKeyAddedHook;
 };
 
 class TLSFrontend
 {
 public:
-  TLSFrontend()
+  enum class ALPN : uint8_t { Unset, DoT, DoH };
+
+  TLSFrontend(ALPN alpn): d_alpn(alpn)
   {
   }
 
@@ -157,6 +164,13 @@ public:
   {
     if (d_ctx != nullptr) {
       d_ctx->loadTicketsKeys(file);
+    }
+  }
+
+  void loadTicketsKey(const std::string& key)
+  {
+    if (d_ctx != nullptr) {
+      d_ctx->loadTicketsKey(key);
     }
   }
 
@@ -223,7 +237,9 @@ public:
   TLSErrorCounters d_tlsCounters;
   ComboAddress d_addr;
   std::string d_provider;
-
+  ALPN d_alpn{ALPN::Unset};
+  /* whether the proxy protocol is inside or outside the TLS layer */
+  bool d_proxyProtocolOutsideTLS{false};
 protected:
   std::shared_ptr<TLSCtx> d_ctx{nullptr};
 };
@@ -231,16 +247,16 @@ protected:
 class TCPIOHandler
 {
 public:
-  enum class Type : uint8_t { Client, Server };
-
-  TCPIOHandler(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout, std::shared_ptr<TLSCtx> ctx, time_t now): d_socket(socket)
+  TCPIOHandler(const std::string& host, bool hostIsAddr, int socket, const struct timeval& timeout, const std::shared_ptr<TLSCtx>& ctx) :
+    d_socket(socket)
   {
     if (ctx) {
       d_conn = ctx->getClientConnection(host, hostIsAddr, d_socket, timeout);
     }
   }
 
-  TCPIOHandler(int socket, const struct timeval& timeout, std::shared_ptr<TLSCtx> ctx, time_t now): d_socket(socket)
+  TCPIOHandler(int socket, const struct timeval& timeout, const std::shared_ptr<TLSCtx>& ctx, time_t now) :
+    d_socket(socket)
   {
     if (ctx) {
       d_conn = ctx->getConnection(d_socket, timeout, now);
@@ -364,13 +380,13 @@ public:
      return Done when toRead bytes have been read, needRead or needWrite if the IO operation
      would block.
   */
-  IOState tryRead(PacketBuffer& buffer, size_t& pos, size_t toRead, bool allowIncomplete=false)
+  IOState tryRead(PacketBuffer& buffer, size_t& pos, size_t toRead, bool allowIncomplete=false, bool bypassFilters=false)
   {
     if (buffer.size() < toRead || pos >= toRead) {
       throw std::out_of_range("Calling tryRead() with a too small buffer (" + std::to_string(buffer.size()) + ") for a read of " + std::to_string(toRead - pos) + " bytes starting at " + std::to_string(pos));
     }
 
-    if (d_conn) {
+    if (!bypassFilters && d_conn) {
       return d_conn->tryRead(buffer, pos, toRead, allowIncomplete);
     }
 
@@ -473,14 +489,6 @@ public:
     return writen2WithTimeout(d_socket, buffer, bufferSize, writeTimeout);
   }
 
-  bool hasBufferedData() const
-  {
-    if (d_conn) {
-      return d_conn->hasBufferedData();
-    }
-    return false;
-  }
-
   std::string getServerNameIndication() const
   {
     if (d_conn) {
@@ -557,7 +565,7 @@ public:
     return d_conn->getAsyncFDs();
   }
 
-  const static bool s_disableConnectForUnitTests;
+  static const bool s_disableConnectForUnitTests;
 
 private:
   std::unique_ptr<TLSConnection> d_conn{nullptr};
@@ -574,6 +582,8 @@ struct TLSContextParameters
   std::string d_ciphers;
   std::string d_ciphers13;
   std::string d_caStore;
+  std::string d_keyLogFile;
+  TLSFrontend::ALPN d_alpn{TLSFrontend::ALPN::Unset};
   bool d_validateCertificates{true};
   bool d_releaseBuffers{true};
   bool d_enableRenegotiation{false};
@@ -582,3 +592,4 @@ struct TLSContextParameters
 
 std::shared_ptr<TLSCtx> getTLSContext(const TLSContextParameters& params);
 bool setupDoTProtocolNegotiation(std::shared_ptr<TLSCtx>& ctx);
+bool setupDoHProtocolNegotiation(std::shared_ptr<TLSCtx>& ctx);

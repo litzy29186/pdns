@@ -5,13 +5,7 @@ Each served zone can have "metadata". Such metadata determines how this
 zone behaves in certain circumstances.
 
 .. warning::
-  Domain metadata is only available for DNSSEC capable
-  backends! Make sure to enable the proper '-dnssec' setting to benefit.
-
-.. warning::
-  When multiple backends are in use, domain metadata is only retrieved from
-  and written to the first DNSSEC-capable backend, no matter where the related
-  zones live.
+  When multiple backends are in use, domain metadata is only retrieved from and written to the first DNSSEC-capable or metadata-capable backend, no matter where the related zones live.
 
 For the BIND backend, this information is either stored in the
 :ref:`setting-bind-dnssec-db` or the hybrid database,
@@ -33,7 +27,7 @@ The following options can only be read (not written to) via the HTTP API metadat
 * PRESIGNED
 * TSIG-ALLOW-AXFR
 
-The option SOA-EDIT-API can not be written or read via the HTTP API metadata endpoint.
+The option SOA-EDIT-API cannot be written or read via the HTTP API metadata endpoint.
 
 .. _metadata-allow-axfr-from:
 
@@ -43,7 +37,7 @@ ALLOW-AXFR-FROM
 Per-zone AXFR ACLs can be stored in the domainmetadata table.
 
 Each ACL specifies one subnet (v4 or v6), or the magical value 'AUTO-NS'
-that tries to allow all potential slaves in.
+that tries to allow all potential secondaries in.
 
 Example:
 
@@ -73,7 +67,7 @@ This metadata item controls whether or not a zone is fully rectified on changes
 to the contents of a zone made through the :doc:`API <http-api/index>`.
 
 When the ``API-RECTIFY`` value is "1", the zone will be rectified on changes.
-Any other other value means that it will not be rectified. If this is not set
+Any other value means that it will not be rectified. If this is not set
 at all, rectifying of the zone depends on the config variable
 :ref:`setting-default-api-rectify`.
 
@@ -96,7 +90,7 @@ ALSO-NOTIFY
 -----------
 
 When notifying this domain, also notify this nameserver (can occur
-multiple times). The nameserver may have contain an optional port
+multiple times). The nameserver may contain an optional port
 number. e.g.:
 
 .. code-block:: shell
@@ -200,9 +194,9 @@ SLAVE-RENOTIFY
 --------------
 .. versionadded:: 4.3.0
 
-If set to 1, will make PowerDNS renotify the slaves after an AXFR is received from a master.
+If set to 1, will make PowerDNS renotify the secondaries after an AXFR is received from a master.
 Any other value means that no renotifies are done. If not set at all, action will depend on
-the :ref:`setting-slave-renotify` setting.
+the :ref:`setting-secondary-do-renotify` setting.
 
 .. _metadata-soa-edit:
 
@@ -210,9 +204,9 @@ SOA-EDIT
 --------
 
 When serving this zone, modify the SOA serial number in one of several
-ways. Mostly useful to get slaves to re-transfer a zone regularly to get
+ways. Mostly useful to get secondaries to re-transfer a zone regularly to get
 fresh RRSIGs. See the :ref:`DNSSEC
-documentation <soa-edit-ensure-signature-freshness-on-slaves>`
+documentation <soa-edit-ensure-signature-freshness-on-secondaries>`
 for more information.
 
 .. _metadata-soa-edit-api:
@@ -237,7 +231,7 @@ TSIG-ALLOW-DNSUPDATE
 --------------------
 
 This setting allows you to set the TSIG key required to do an :doc:`dnsupdate`.
-If :ref:`GSS-TSIG <tsig-gss-tsig>` is enabled, you can put kerberos principals here as well.
+If :ref:`GSS-TSIG <tsig-gss-tsig>` is enabled, you can put Kerberos principals here as well.
 
 Extra metadata
 --------------

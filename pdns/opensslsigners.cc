@@ -19,14 +19,13 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
  */
+
+#include "config.h"
 #include "misc.hh"
 #include <memory>
 #include <openssl/crypto.h>
 #include <openssl/ec.h>
 #include <optional>
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
 #include <openssl/obj_mac.h>
 #ifdef HAVE_LIBCRYPTO_ECDSA
 #include <openssl/ecdsa.h>
@@ -180,7 +179,7 @@ void openssl_seed()
 
   unsigned int r;
   for (int i = 0; i < 1024; i += 4) {
-    r = dns_random(0xffffffff);
+    r = dns_random_uint32();
     entropy.append((const char*)&r, 4);
   }
 
@@ -1843,7 +1842,7 @@ int OpenSSLEDDSADNSCryptoKeyEngine::getBits() const
   return (int)d_len << 3;
 }
 
-bool OpenSSLEDDSADNSCryptoKeyEngine::checkKey(std::optional<std::reference_wrapper<std::vector<std::string>>> errorMessages) const
+bool OpenSSLEDDSADNSCryptoKeyEngine::checkKey([[maybe_unused]] std::optional<std::reference_wrapper<std::vector<std::string>>> errorMessages) const
 {
 #if OPENSSL_VERSION_MAJOR >= 3
   auto ctx = KeyContext{EVP_PKEY_CTX_new_from_pkey(nullptr, d_edkey.get(), nullptr), EVP_PKEY_CTX_free};

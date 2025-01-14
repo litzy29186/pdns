@@ -49,7 +49,7 @@ master_doc = 'index_TOC'
 
 # General information about the project.
 project = 'dnsdist'
-copyright = '2015-' + str(datetime.date.today().year) + ', PowerDNS.COM BV and its contributors'
+copyright = 'PowerDNS.COM BV and its contributors'
 author = 'PowerDNS.COM BV and its contributors'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -92,7 +92,7 @@ changelog_render_pullreq = "https://github.com/PowerDNS/pdns/pull/%s"
 changelog_render_changeset = "https://github.com/PowerDNS/pdns/commit/%s"
 
 changelog_sections = ['New Features', 'Improvements', 'Bug Fixes', 'Removals']
-changelog_inner_tag_sort = ['Security', 'DNS over HTTPS', 'DNS over TLS', 'DNSCrypt', 'DNSTAP', 'Protobuf', 'Performance', 'Webserver', 'Metrics']
+changelog_inner_tag_sort = ['Security', 'DNS over QUIC', 'DNS over HTTP3', 'DNS over HTTPS', 'DNS over TLS', 'DNSCrypt', 'DNSTAP', 'Protobuf', 'Performance', 'Webserver', 'Metrics']
 
 changelog_hide_tags_in_entry = True
 
@@ -117,6 +117,7 @@ html_static_path = ['_static']
 
 html_favicon = '_static/favicon.ico'
 
+html_sidebars = { '**': ['searchbox.html', 'relations.html', 'localtoc.html', 'sourcelink.html'] }
 
 # -- Options for HTMLHelp output ------------------------------------------
 

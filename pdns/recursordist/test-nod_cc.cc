@@ -1,4 +1,7 @@
+#ifndef BOOST_TEST_DYN_LINK
 #define BOOST_TEST_DYN_LINK
+#endif
+
 #define BOOST_TEST_NO_MAIN
 #include <boost/test/unit_test.hpp>
 #include "nod.hh"
@@ -9,7 +12,7 @@ using namespace nod;
 
 BOOST_AUTO_TEST_SUITE(nod_cc)
 
-static bool pdns_exception(PDNSException const& ex) { return true; }
+static bool pdns_exception(PDNSException const& /* ex */) { return true; }
 
 BOOST_AUTO_TEST_CASE(test_basic)
 {

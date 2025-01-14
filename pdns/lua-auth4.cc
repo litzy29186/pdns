@@ -13,8 +13,6 @@
 
 #include "ueberbackend.hh"
 
-AuthLua4::AuthLua4() { prepareContext(); }
-
 LuaContext* AuthLua4::getLua()
 {
   return d_lw.get();
@@ -44,7 +42,7 @@ void AuthLua4::postPrepareContext() {
   d_lw->registerFunction<DNSPacket, Netmask()>("getRealRemote", [](DNSPacket &p) { return p.getRealRemote(); });
   d_lw->registerFunction<DNSPacket, ComboAddress()>("getLocal", [](DNSPacket &p) { return p.getLocal(); });
   d_lw->registerFunction<DNSPacket, unsigned int()>("getRemotePort", [](DNSPacket &p) { return p.getInnerRemote().getPort(); });
-  d_lw->registerFunction<DNSPacket, std::tuple<const std::string, unsigned int>()>("getQuestion", [](DNSPacket &p) { return std::make_tuple(p.qdomain.toString(), static_cast<unsigned int>(p.qtype.getCode())); });
+  d_lw->registerFunction<DNSPacket, std::tuple<const std::string, unsigned int>()>("getQuestion", [](DNSPacket &p) { return std::tuple(p.qdomain.toString(), static_cast<unsigned int>(p.qtype.getCode())); });
   d_lw->registerFunction<DNSPacket, void(bool)>("setA", [](DNSPacket &p, bool a) { return p.setA(a); });
   d_lw->registerFunction<DNSPacket, void(unsigned int)>("setID", [](DNSPacket &p, unsigned int id) { return p.setID(static_cast<uint16_t>(id)); });
   d_lw->registerFunction<DNSPacket, void(bool)>("setRA", [](DNSPacket &p, bool ra) { return p.setRA(ra); });
@@ -84,6 +82,9 @@ void AuthLua4::postPrepareContext() {
   d_lw->registerFunction<DNSName(UpdatePolicyQuery::*)()>("getTsigName", [](UpdatePolicyQuery& upq) { return upq.tsigName; });
   d_lw->registerFunction<std::string(UpdatePolicyQuery::*)()>("getPeerPrincipal", [](UpdatePolicyQuery& upq) { return upq.peerPrincipal; });
 /* end of update policy */
+  if (!d_include_path.empty()) {
+    includePath(d_include_path);
+  }
 }
 
 void AuthLua4::postLoad() {
@@ -93,13 +94,11 @@ void AuthLua4::postLoad() {
 }
 
 bool AuthLua4::axfrfilter(const ComboAddress& remote, const DNSName& zone, const DNSResourceRecord& in, vector<DNSResourceRecord>& out) {
-  luacall_axfr_filter_t::result_type ret;
-  int rcode;
+  if (!d_axfr_filter) {
+    return false;
+  }
 
-  if (d_axfr_filter == nullptr) return false;
-
-  ret = d_axfr_filter(remote, zone, in);
-  rcode = std::get<0>(ret);
+  const auto& [rcode, rows] = d_axfr_filter(remote, zone, in);
   if (rcode < 0) {
     // no modification, handle normally
     return false;
@@ -113,8 +112,6 @@ bool AuthLua4::axfrfilter(const ComboAddress& remote, const DNSName& zone, const
   }
   else
     throw PDNSException("Cannot understand return code "+std::to_string(rcode)+" in axfr filter response");
-
-  const auto& rows = std::get<1>(ret);
 
   try {
     for(const auto& row: rows) {
@@ -170,4 +167,4 @@ std::unique_ptr<DNSPacket> AuthLua4::prequery(const DNSPacket& q) {
   return nullptr;
 }
 
-AuthLua4::~AuthLua4() { }
+AuthLua4::~AuthLua4() = default;

@@ -1,6 +1,27 @@
 Upgrade Guide
 =============
 
+1.8.x to 1.9.0
+--------------
+
+dnsdist now supports a new library for dealing with incoming DNS over HTTPS queries: ``nghttp2``. The previously used library, ``h2o``, can still be used
+but is now deprecated, disabled by default (see ``--with-h2o`` to enable it back) and will be removed in the future, as it is unfortunately no longer maintained in a way that is suitable for use as a library
+(see https://github.com/h2o/h2o/issues/3230). See the ``library`` parameter on the :func:`addDOHLocal` directive for more information on how to select
+the library used when dnsdist is built with support for both ``h2o`` and ``nghttp2``. The default is now ``nghttp2`` whenever possible.
+Note that ``nghttp2`` only supports HTTP/2, and not HTTP/1, while ``h2o`` supported both. This is not an issue for actual DNS over HTTPS clients that
+support HTTP/2, but might be one in setups running dnsdist behind a reverse-proxy that does not support HTTP/2. See :doc:`guides/dns-over-https` for some work-around.
+
+SNMP support is no longer enabled by default during ``configure``, requiring ``--with-net-snmp`` to be built.
+
+The use of :func:`makeRule` is now deprecated, please use :func:`NetmaskGroupRule` or :func:`QNameSuffixRule` instead.
+Passing a string or list of strings instead of a :class:`DNSRule` to these functions is deprecated as well, :func:`NetmaskGroupRule` and :func:`QNameSuffixRule` should there again be used instead:
+
+* :func:`addAction`
+* :func:`addResponseAction`
+* :func:`addCacheHitResponseAction`
+* :func:`addCacheInsertedResponseAction`
+* :func:`addSelfAnsweredResponseAction`
+
 1.7.x to 1.8.0
 --------------
 
@@ -8,9 +29,16 @@ Responses to AXFR and IXFR queries are no longer cached.
 
 Cache-hits are now counted as responses in our metrics.
 
+Cache hits are now inserted into the in-memory ring buffers, while before 1.8.0 only cache misses were inserted. This has a very noticeable impact on :doc:`guides/dynblocks` since cache hits now considered when computing the rcode rates and ratios, as well as the response bandwidth rate.
+
 The :func:`setMaxTCPConnectionsPerClient` limit is now properly applied to DNS over HTTPS connections, in addition to DNS over TCP and DNS over TLS ones.
 
 The configuration check will now fail if the configuration file does not exist. For this reason we now create a default configuration file, based on the file previously called ``dnsdistconf.lua``, which contains commented-out examples of how to set up dnsdist.
+
+Latency metrics have been broken down:
+
+* per incoming protocol (Do53 UDP, Do53 TCP, DoT, DoH) for global latency metrics
+* between UDP (Do53) and TCP (Do53 TCP, DoT, DoH) for backend latency metrics
 
 1.7.0 to 1.7.1
 --------------
@@ -37,7 +65,7 @@ The packet cache no longer hashes EDNS Cookies by default, which means that two 
 
 All TCP worker threads are now created at startup, instead of being created on-demand. The existing behaviour was useful for very small setups but did not scale quickly to a large amount of TCP connections.
 The new behaviour can cause a noticeable increase of TCP connections between dnsdist and its backends, as the TCP connections are not shared between TCP worker threads.
-This is especially true for setups with a large number of frontends (:func:`addLocal`, :func:`addTLSLocal`, and :func:`addDNSCryptBind` directives), as 1.6.0 sets the number of TCP workers to the number of TCP-enabled binds (with a minimum of 10), unless that number has been set explicitely via :func:`setMaxTCPClientThreads`.
+This is especially true for setups with a large number of frontends (:func:`addLocal`, :func:`addTLSLocal`, and :func:`addDNSCryptBind` directives), as 1.6.0 sets the number of TCP workers to the number of TCP-enabled binds (with a minimum of 10), unless that number has been set explicitly via :func:`setMaxTCPClientThreads`.
 
 Several actions have been renamed so that almost all actions that allow further processing of rules start with 'Set', to prevent mistakes:
 

@@ -21,6 +21,7 @@
  */
 #pragma once
 #include "dnsrecords.hh"
+#include "dnspacket.hh"
 
 #include <string>
 #include <vector>
@@ -36,7 +37,7 @@ class DNSCryptoKeyEngine
 {
   public:
     explicit DNSCryptoKeyEngine(unsigned int algorithm) : d_algorithm(algorithm) {}
-    virtual ~DNSCryptoKeyEngine() {};
+    virtual ~DNSCryptoKeyEngine() = default;
     [[nodiscard]] virtual string getName() const = 0;
 
     using stormap_t = std::map<std::string, std::string>;
@@ -66,7 +67,7 @@ class DNSCryptoKeyEngine
     void createFromPEMString(DNSKEYRecordContent& drc, const std::string& contents)
     {
       // NOLINTNEXTLINE(*-cast): POSIX APIs.
-      unique_ptr<std::FILE, decltype(&std::fclose)> inputFile{fmemopen(const_cast<char*>(contents.data()), contents.length(), "r"), &std::fclose};
+      pdns::UniqueFilePtr inputFile{fmemopen(const_cast<char*>(contents.data()), contents.length(), "r")};
       createFromPEMFile(drc, *inputFile);
     }
 
@@ -89,7 +90,7 @@ class DNSCryptoKeyEngine
 
       std::string output{};
       output.resize(buflen);
-      unique_ptr<std::FILE, decltype(&std::fclose)> outputFile{fmemopen(output.data(), output.length() - 1, "w"), &std::fclose};
+      pdns::UniqueFilePtr outputFile{fmemopen(output.data(), output.length() - 1, "w")};
       convertToPEMFile(*outputFile);
       std::fflush(outputFile.get());
       output.resize(std::ftell(outputFile.get()));
@@ -166,6 +167,8 @@ class DNSCryptoKeyEngine
     static std::unique_ptr<DNSCryptoKeyEngine> makeFromPublicKeyString(unsigned int algorithm, const std::string& raw);
     static std::unique_ptr<DNSCryptoKeyEngine> make(unsigned int algorithm);
     static bool isAlgorithmSupported(unsigned int algo);
+    static bool isAlgorithmSwitchedOff(unsigned int algo);
+    static void switchOffAlgorithm(unsigned int algo);
     static bool isDigestSupported(uint8_t digest);
 
     using maker_t = std::unique_ptr<DNSCryptoKeyEngine> (unsigned int);
@@ -175,6 +178,9 @@ class DNSCryptoKeyEngine
     static vector<pair<uint8_t, string>> listAllAlgosWithBackend();
     static bool testAll();
     static bool testOne(int algo);
+    static bool verifyOne(unsigned int algo);
+    static bool testVerify(unsigned int algo, maker_t* verifier);
+    static string listSupportedAlgoNames();
 
   private:
     using makers_t = std::map<unsigned int, maker_t *>;
@@ -189,6 +195,8 @@ class DNSCryptoKeyEngine
       static allmakers_t s_allmakers;
       return s_allmakers;
     }
+    // Must be set before going multi-threaded and not changed after that
+    static std::unordered_set<unsigned int> s_switchedOff;
 
   protected:
     const unsigned int d_algorithm;
@@ -241,8 +249,8 @@ private:
 
   DNSKEYRecordContent d_dnskey;
   std::shared_ptr<DNSCryptoKeyEngine> d_key;
-  uint16_t d_flags;
-  uint8_t d_algorithm;
+  uint16_t d_flags{0};
+  uint8_t d_algorithm{0};
 };
 
 
@@ -263,12 +271,12 @@ struct CanonicalCompare
 };
 
 struct sharedDNSSECRecordCompare {
-    bool operator() (const shared_ptr<DNSRecordContent>& a, const shared_ptr<DNSRecordContent>& b) const {
+    bool operator() (const shared_ptr<const DNSRecordContent>& a, const shared_ptr<const DNSRecordContent>& b) const {
       return a->serialize(g_rootdnsname, true, true) < b->serialize(g_rootdnsname, true, true);
     }
 };
 
-typedef std::set<std::shared_ptr<DNSRecordContent>, sharedDNSSECRecordCompare> sortedRecords_t;
+typedef std::set<std::shared_ptr<const DNSRecordContent>, sharedDNSSECRecordCompare> sortedRecords_t;
 
 string getMessageForRRSET(const DNSName& qname, const RRSIGRecordContent& rrc, const sortedRecords_t& signRecords, bool processRRSIGLabels = false, bool includeRRSIG_RDATA = true);
 
@@ -284,7 +292,7 @@ string hashQNameWithSalt(const std::string& salt, unsigned int iterations, const
 void incrementHash(std::string& raw);
 void decrementHash(std::string& raw);
 
-void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const std::set<DNSName>& authMap, vector<DNSZoneRecord>& rrs);
+void addRRSigs(DNSSECKeeper& dk, UeberBackend& db, const std::set<DNSName>& authSet, vector<DNSZoneRecord>& rrs, DNSPacket* packet=nullptr);
 
 void addTSIG(DNSPacketWriter& pw, TSIGRecordContent& trc, const DNSName& tsigkeyname, const string& tsigsecret, const string& tsigprevious, bool timersonly);
 bool validateTSIG(const std::string& packet, size_t sigPos, const TSIGTriplet& tt, const TSIGRecordContent& trc, const std::string& previousMAC, const std::string& theirMAC, bool timersOnly, unsigned int dnsHeaderOffset=0);

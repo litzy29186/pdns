@@ -24,6 +24,7 @@
 #include <map>
 #include <string>
 
+#include "dns.hh"
 #include "dnsname.hh"
 #include "pdnsexception.hh"
 
@@ -64,9 +65,17 @@ class ixfrdistStats {
     void registerDomain(const DNSName& d) {
       domainStats[d].haveZone = false;
     }
-    void incrementUnknownDomainInQueries(const DNSName &d) { // the name is ignored. It would be great to report it, but we don't want to blow up Prometheus
+
+    void incrementUnknownDomainInQueries(const DNSName& /* d */)
+    { // the name is ignored. It would be great to report it, but we don't want to blow up Prometheus
       progStats.unknownDomainInQueries += 1;
     }
+
+    void incrementNotImplemented(uint8_t opcode)
+    {
+      notimpStats.at(opcode) ++;
+    }
+
   private:
     class perDomainStat {
       public:
@@ -90,6 +99,7 @@ class ixfrdistStats {
     };
 
     std::map<DNSName, perDomainStat> domainStats;
+    std::array<std::atomic<uint64_t>, 16> notimpStats{};
     programStats progStats;
 
     std::map<DNSName, perDomainStat>::iterator getRegisteredDomain(const DNSName& d) {

@@ -15,21 +15,51 @@ See below for more information about the various caches.
 When deploying (large scale) IPv6, please be aware some Linux distributions leave IPv6 routing cache tables at very small default values.
 Please check and if necessary raise ``sysctl net.ipv6.route.max_size``.
 
-Set :ref:`setting-threads` to your number of CPU cores minus the number of distributor threads (but values above 8 rarely improve performance).
+Set :ref:`setting-threads` to your number of CPU cores minus the number of distributor threads.
 
 Threading and distribution of queries
 -------------------------------------
 
-When running with several threads, you can either ask PowerDNS to start one or more special threads to dispatch the incoming queries to the workers by setting :ref:`setting-pdns-distributes-queries` to true, or let the worker threads handle the incoming queries themselves.
+When running with several threads, you can either ask PowerDNS to start one or more special threads to dispatch the incoming queries to the workers by setting :ref:`setting-pdns-distributes-queries` to ``yes``, or let the worker threads handle the incoming queries themselves.
+The latter is the default since version 4.9.0.
 
 The dispatch thread enabled by :ref:`setting-pdns-distributes-queries` tries to send the same queries to the same thread to maximize the cache-hit ratio.
 If the incoming query rate is so high that the dispatch thread becomes a bottleneck, you can increase :ref:`setting-distributor-threads` to use more than one.
 
-If :ref:`setting-pdns-distributes-queries` is set to false and either ``SO_REUSEPORT`` support is not available or the :ref:`setting-reuseport` directive is set to false, all worker threads share the same listening sockets.
+If :ref:`setting-pdns-distributes-queries` is set to ``no`` and either ``SO_REUSEPORT`` support is not available or the :ref:`setting-reuseport` directive is set to ``no``, all worker threads share the same listening sockets.
 
 This prevents a single thread from having to handle every incoming queries, but can lead to thundering herd issues where all threads are awoken at once when a query arrives.
 
-If ``SO_REUSEPORT`` support is available and :ref:`setting-reuseport` is set to true, separate listening sockets are opened for each worker thread and the query distributions is handled by the kernel, avoiding any thundering herd issue as well as preventing the distributor thread from becoming the bottleneck.
+If ``SO_REUSEPORT`` support is available and :ref:`setting-reuseport` is set to ``yes``, which is the
+default since version 4.9.0, separate listening sockets are opened for each worker thread and the query distributions is handled by the kernel, avoiding any thundering herd issue as well as preventing the distributor thread from becoming the bottleneck.
+The next section discusses how to determine if the mechanism is working properly.
+
+.. _worker_imbalance:
+
+Imbalance
+^^^^^^^^^
+Due to the nature of the distribution method used by the kernel imbalance with the new default settings of :ref:`setting-reuseport` and :ref:`setting-pdns-distributes-queries` may occur if you have very few clients.
+Imbalance can be observed by reading the periodic statistics reported by :program:`Recursor`::
+
+  Jun 26 11:06:41 pepper pdns-recursor[10502]: msg="Queries handled by thread" subsystem="stats" level="0" prio="Info" tid="0" ts="1687770401.359" count="7" thread="0"
+  Jun 26 11:06:41 pepper pdns-recursor[10502]: msg="Queries handled by thread" subsystem=" stats" level="0" prio="Info" tid="0" ts="1687770401.359" count="535167" thread="1"
+  Jun 26 11:06:41 pepper pdns-recursor[10502]: msg="Queries handled by thread" subsystem=" stats" level="0" prio="Info" tid="0" ts="1687770401.359" count="5" thread="2"
+
+In the above log lines we see that almost all queries are processed by thread 1.
+This can typically be observed when using ``dnsdist`` in front of :program:`Recursor`.
+
+When using ``dnsdist`` with a single ``newServer`` to a recursor instance in its configuration, the kernel will regard ``dnsdist`` as a single client unless you use the ``sockets`` parameter to ``newServer`` to increase the number of source ports used by ``dnsdist``.
+The following guideline applies for the ``dnsdist`` case:
+
+- Be generous with the ``sockets`` setting of ``newServer``.
+  A starting points is to configure twice as many sockets as :program:`Recursor` threads.
+- As long as the threads of the :program:`Recursor` as not overloaded, some imbalance will not impact performance significantly.
+- If you want to reduce imbalance, increase the value of ``sockets`` even more.
+
+Non-Linux systems
+^^^^^^^^^^^^^^^^^
+On some systems setting :ref:`setting-reuseport` to ``yes`` does not have the desired effect at all.
+If your systems shows great imbalance in the number of queries processed per thread (as reported by the periodic statistics report), try switching :ref:`setting-reuseport` to ``no`` and/or setting  :ref:`setting-pdns-distributes-queries` to ``yes``.
 
 .. versionadded:: 4.1.0
    The :ref:`setting-cpu-map` parameter can be used to pin worker threads to specific CPUs, in order to keep caches as warm as possible and optimize memory access on NUMA systems.
@@ -37,16 +67,33 @@ If ``SO_REUSEPORT`` support is available and :ref:`setting-reuseport` is set to 
 .. versionadded:: 4.2.0
    The :ref:`setting-distributor-threads` parameter can be used to run more than one distributor thread.
 
+.. versionchanged:: 4.9.0
+   The :ref:`setting-reuseport` parameter now defaults to ``yes``.
+
+.. versionchanged:: 4.9.0
+   The :ref:`setting-pdns-distributes-queries` parameter now defaults to ``no``.
+
+
 MTasker and MThreads
 --------------------
 
-PowerDNS Recursor uses a cooperative multitasking in userspace called ``MTasker``, based either on ``boost::context`` if available, or on ``System V ucontexts`` otherwise. For maximum performance, please make sure that your system supports ``boost::context``, as the alternative has been known to be quite slower.
+PowerDNS :program:`Recursor` uses a cooperative multitasking in userspace called ``MTasker``, based either on ``boost::context`` if available, or on ``System V ucontexts`` otherwise. For maximum performance, please make sure that your system supports ``boost::context``, as the alternative has been known to be quite slower.
 
 The maximum number of simultaneous MTasker threads, called ``MThreads``, can be tuned via :ref:`setting-max-mthreads`, as the default value of 2048 might not be enough for large-scale installations.
+This setting limits the number of mthreads *per physical (Posix) thread*.
+The threads that create mthreads are the distributor and worker threads.
 
-When a ``MThread`` is started, a new stack is dynamically allocated for it on the heap. The size of that stack can be configured via the :ref:`setting-stack-size` parameter, whose default value is 200 kB which should be enough in most cases.
+When a ``MThread`` is started, a new stack is dynamically allocated for it. The size of that stack can be configured via the :ref:`setting-stack-size` parameter, whose default value is 200 kB which should be enough in most cases.
 
-To reduce the cost of allocating a new stack for every query, the recursor can cache a small amount of stacks to make sure that the allocation stays cheap. This can be configured via the :ref:`setting-stack-cache-size` setting. The only trade-off of enabling this cache is a slightly increased memory consumption, at worst equals to the number of stacks specified by :ref:`setting-stack-cache-size` multiplied by the size of one stack, itself specified via :ref:`setting-stack-size`.
+To reduce the cost of allocating a new stack for every query, the recursor can cache a small amount of stacks to make sure that the allocation stays cheap. This can be configured via the :ref:`setting-stack-cache-size` setting.
+This limit is per physical (Posix) thread.
+The only trade-off of enabling this cache is a slightly increased memory consumption, at worst equals to the number of stacks specified by :ref:`setting-stack-cache-size` multiplied by the size of one stack, itself specified via :ref:`setting-stack-size`.
+
+Linux limits the number of memory mappings a process can allocate by the ``vm.max_map_count`` kernel parameter.
+A single ``MThread`` stack can take up to 3 memory mappings.
+Starting with version 4.9, it is advised to check and if needed update the value of ``sysctl vm.max_map_count`` to make sure that the :program:`Recursor` can allocate enough stacks under load; suggested value is at least ``4 * (threads + 2) * max-mthreads``.
+Some Linux distributions use a default value of about one million, which should be enough for most configurations.
+Other distributions default to 64k, which can be too low for large setups.
 
 Performance tips
 ----------------
@@ -63,58 +110,68 @@ When running with >3000 queries per second, and running Linux versions prior to 
 This is solved by rebooting with ``clock=tsc`` or upgrading to a 2.6.17 kernel.
 This is relevant if dmesg shows ``Using pmtmr for high-res timesource``.
 
+Memory usage
+------------
+
+:program:`Recursor` keeps all the data it needs in memory.
+The default configuration uses a little more than 1GB when the caches are full.
+Depending on configuration, memory usage can amount to many gigabytes for a large installation.
+
+.. warning::
+   Avoid swapping. The memory access patterns of :program:`Recursor` are random. This means
+   that it will cause trashing (the OS spending lots of time pulling in and writing out memory
+   pages) if :program:`Recursor` uses more physical memory than available and performance will be severely impacted.
+
+Below the memory usage observed for a specific test case are described.
+Please note that depending on OS, version of system libraries, version of the :program:`Recursor`, features used and usage patterns these numbers may vary.
+Test and observe your system to learn more about the memory requirements specific to your case.
+
+The most important subsystems that use memory are:
+
+- The packet cache. The amount of memory used in a test case was about 500 bytes per entry
+- The record cache. The amount of memory used in a test case was about 850 bytes per entry
+- Authoritative zones loaded. Memory usage is dependent on the size and number loaded.
+- RPZ zones loaded. Memory usage is dependent on the size and number loaded.
+- NOD DBs. Memory usage is dependent on specific settings of this subsystem.
+
+An estimate for the memory used by its caches for a :program:`Recursor` having 2 million record cache entries and 1 million packet cache entries is ``2e6 * 850 * + 1e6 * 500 = about 2GB``.
+
 Connection tracking and firewalls
 ---------------------------------
 
 A Recursor under high load puts a severe stress on any stateful (connection tracking) firewall, so much so that the firewall may fail.
 
 Specifically, many Linux distributions run with a connection tracking firewall configured.
-For high load operation (thousands of queries/second), It is advised to either turn off iptables completely, or use the ``NOTRACK`` feature to make sure DNS traffic bypasses the connection tracking.
+For high load operation (thousands of queries/second), It is advised to either turn off iptables completely, or use the ``NOTRACK`` feature to make sure client DNS traffic bypasses the connection tracking.
 
 Sample Linux command lines would be::
 
     ## IPv4
-    iptables -t raw -I OUTPUT -p udp --dport 53 -j CT --notrack
+    ## NOTRACK rules for 53/udp, keep in mind that you also need your regular rules for 53/tcp
     iptables -t raw -I OUTPUT -p udp --sport 53 -j CT --notrack
     iptables -t raw -I PREROUTING -p udp --dport 53 -j CT --notrack
-    iptables -t raw -I PREROUTING -p udp --sport 53 -j CT --notrack
     iptables -I INPUT -p udp --dport 53 -j ACCEPT
-    iptables -I INPUT -p udp --sport 53 -j ACCEPT
-    iptables -I OUTPUT -p udp --dport 53 -j ACCEPT
-    iptables -I OUTPUT -p udp --sport 53 -j ACCEPT
 
     ## IPv6
-    ip6tables -t raw -I OUTPUT -p udp --dport 53 -j CT --notrack
+    ## NOTRACK rules for 53/udp, keep in mind that you also need your regular rules for 53/tcp
     ip6tables -t raw -I OUTPUT -p udp --sport 53 -j CT --notrack
-    ip6tables -t raw -I PREROUTING -p udp --sport 53 -j CT --notrack
     ip6tables -t raw -I PREROUTING -p udp --dport 53 -j CT --notrack
     ip6tables -I INPUT -p udp --dport 53 -j ACCEPT
-    ip6tables -I INPUT -p udp --sport 53 -j ACCEPT
-    ip6tables -I OUTPUT -p udp --dport 53 -j ACCEPT
-    ip6tables -I OUTPUT -p udp --sport 53 -j ACCEPT
 
 When using FirewallD (Centos 7+ / Red Hat 7+ / Fedora 21+), connection tracking can be disabled via direct rules.
 The settings can be made permanent by using the ``--permanent`` flag::
 
     ## IPv4
-    firewall-cmd --direct --add-rule ipv4 raw OUTPUT 0 -p udp --dport 53 -j CT --notrack
+    ## NOTRACK rules for 53/udp, keep in mind that you also need your regular rules for 53/tcp
     firewall-cmd --direct --add-rule ipv4 raw OUTPUT 0 -p udp --sport 53 -j CT --notrack
     firewall-cmd --direct --add-rule ipv4 raw PREROUTING 0 -p udp --dport 53 -j CT --notrack
-    firewall-cmd --direct --add-rule ipv4 raw PREROUTING 0 -p udp --sport 53 -j CT --notrack
     firewall-cmd --direct --add-rule ipv4 filter INPUT 0 -p udp --dport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv4 filter INPUT 0 -p udp --sport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv4 filter OUTPUT 0 -p udp --dport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv4 filter OUTPUT 0 -p udp --sport 53 -j ACCEPT
 
     ## IPv6
-    firewall-cmd --direct --add-rule ipv6 raw OUTPUT 0 -p udp --dport 53 -j CT --notrack
+    ## NOTRACK rules for 53/udp, keep in mind that you also need your regular rules for 53/tcp
     firewall-cmd --direct --add-rule ipv6 raw OUTPUT 0 -p udp --sport 53 -j CT --notrack
     firewall-cmd --direct --add-rule ipv6 raw PREROUTING 0 -p udp --dport 53 -j CT --notrack
-    firewall-cmd --direct --add-rule ipv6 raw PREROUTING 0 -p udp --sport 53 -j CT --notrack
     firewall-cmd --direct --add-rule ipv6 filter INPUT 0 -p udp --dport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv6 filter INPUT 0 -p udp --sport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv6 filter OUTPUT 0 -p udp --dport 53 -j ACCEPT
-    firewall-cmd --direct --add-rule ipv6 filter OUTPUT 0 -p udp --sport 53 -j ACCEPT
 
 Following the instructions above, you should be able to attain very high query rates.
 
@@ -136,21 +193,27 @@ Each of the queries processed will consume an mthread until processing is done.
 A response to a query is sent immediately when it becomes available; the response can be sent before other responses to queries that were received earlier by the Recursor.
 This is the Out-of-Order feature which greatly enhances performance, as a single slow query does not prevent other queries to be processed.
 
+Before version 5.0.0, TCP queries are processed by either the distributer thread(s) if :ref:`setting-pdns-distributes-queries` is true, or by worker threads if :ref:`setting-pdns-distributes-queries` is false.
+Starting with version 5.0.0, :program:`Recursor` has dedicated thread(s) processing TCP queries.
+
 The maximum number of mthreads consumed by TCP queries is :ref:`setting-max-tcp-clients` times :ref:`setting-max-concurrent-requests-per-tcp-connection`.
-This number should be (much) lower than :ref:`setting-max-mthreads`, to also allow UDP queries to be handled as these also consume mthreads.
+Before version 5.0.0, if :ref:`setting-pdns-distributes-queries` is false, this number should be (much) lower than :ref:`setting-max-mthreads`, to also allow UDP queries to be handled as these also consume mthreads.
+Note that :ref:`setting-max-mthreads` is a per Posix thread setting.
+This means that the global maximum number of mthreads  is (#distributor threads + #worker threads) * max-mthreads.
 
 If you expect few clients, you can increase :ref:`setting-max-concurrent-requests-per-tcp-connection`, to allow more concurrency per TCP connection.
 If you expect many clients and you have increased :ref:`setting-max-tcp-clients`, reduce :ref:`setting-max-concurrent-requests-per-tcp-connection` number to prevent mthread starvation or increase the maximum number of mthreads.
 
 To increase the maximum number of concurrent queries consider increasing  :ref:`setting-max-mthreads`, but be aware that each active mthread consumes more than 200k of memory.
-To see the current number of mthreads in use consult the :ref:`stat-concurrent-queries` metric.
-If a query could not be handled due to mthread shortage, the :ref:`stat-over-capacity-drops` metric is increased.
+To see the current number of mthreads in use consult the :doc:`metrics` ``concurrent-queries`` metric.
+If a query could not be handled due to mthread shortage, the ``over-capacity-drops`` metric is increased.
 
 As an example, if you have typically 200 TCP clients, and the default maximum number of mthreads of 2048, a good number of concurrent requests per TCP connection would be 5. Assuming a worst case packet cache hit ratio, if all 200 TCP clients fill their connections with queries, about half (5 * 200) of the mthreads would be used by incoming TCP queries, leaving the other half for incoming UDP queries.
+Note that starting with version 5.0.0, TCP queries are processed by dedicated TCP thread(s), so the sharing of mthreads between UDP and TCP queries no longer applies.
 
 The total number of incoming TCP connections is limited by :ref:`setting-max-tcp-clients`.
 There is also a per client address limit: :ref:`setting-max-tcp-per-client` to limit the impact of a single client.
-Consult the :ref:`stat-tcp-clients` metric for the current number of TCP connections and the :ref:`stat-tcp-client-overflow` metric to see if client connection attempts were rejected because there were too many existing connections from a single address.
+Consult the :doc:`metrics` ``tcp-clients`` metric for the current number of TCP connections and the ``tcp-client-overflow`` metric to see if client connection attempts were rejected because there were too many existing connections from a single address.
 
 .. _tcp-fast-open-support:
 

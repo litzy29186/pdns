@@ -43,6 +43,7 @@ public:
 
   uint32_t getRefreshInterval() const
   {
+    // coverity[store_truncates_time_t]
     return d_refreshinterval;
   }
 
@@ -65,8 +66,8 @@ private:
 
   struct MapCombo
   {
-    MapCombo() {}
-    ~MapCombo() {}
+    MapCombo() = default;
+    ~MapCombo() = default;
     MapCombo(const MapCombo&) = delete;
     MapCombo& operator=(const MapCombo&) = delete;
 
